@@ -26,7 +26,7 @@ AI_PHRASES = [
     "要详细链接或更多内容？",
 ]
 
-def polish_reply(text: str, max_chars: int = 50) -> str:
+def polish_reply(text: str, max_chars: int = 140) -> str:
     text = (text or "").strip()
     for phrase in AI_PHRASES:
         text = text.replace(phrase, "")

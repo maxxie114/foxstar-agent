@@ -27,3 +27,10 @@ def test_split_reply_messages_single_short_paragraph():
     messages = split_reply_messages("这事证据不够，先别急着站队。")
 
     assert messages == ["这事证据不够，先别急着站队。"]
+
+
+def test_split_reply_messages_keeps_more_information():
+    messages = split_reply_messages("斜着过还不够。门的对角线只有约2.24米。除非竹竿能先伸出门外再转角。")
+
+    assert len(messages) == 3
+    assert "2.24" in messages[1]

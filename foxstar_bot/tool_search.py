@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+
 from dataclasses import dataclass
+
 from typing import Any
 
 import requests
@@ -10,14 +12,12 @@ from .config import AppConfig
 
 LOG = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True)
 class SearchResult:
     title: str
     url: str
     snippet: str
     source: str
-
 
 class SearchTool:
     def __init__(self, config: AppConfig) -> None:
@@ -47,16 +47,6 @@ class SearchTool:
             "source",
         ]
         return any(token in lowered for token in triggers)
-
-    def search(self, query: str, max_results: int = 5) -> list[SearchResult]:
-        provider = self.config.tools.preferred_search_provider.lower()
-        if provider == "exa" and self.config.exa_api_key:
-            return self._exa(query, max_results)
-        if self.config.tavily_api_key:
-            return self._tavily(query, max_results)
-        if self.config.exa_api_key:
-            return self._exa(query, max_results)
-        raise RuntimeError("未配置 TAVILY_API_KEY 或 EXA_API_KEY，不能进行 web search")
 
     def _tavily(self, query: str, max_results: int) -> list[SearchResult]:
         payload = {
@@ -98,7 +88,6 @@ class SearchTool:
             )
             for item in data.get("results", [])
         ]
-
 
 def render_search_results(results: list[SearchResult]) -> str:
     if not results:

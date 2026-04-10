@@ -14,7 +14,7 @@ class LLMClient:
             from openai import OpenAI
         except Exception as exc:
             raise RuntimeError("需要安装 openai Python SDK") from exc
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAI(api_key=api_key, timeout=35.0, max_retries=1)
         self.config = model_config
 
     def chat(self, messages: list[dict[str, Any]]) -> str:
