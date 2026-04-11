@@ -17,3 +17,10 @@ from .privacy import redact_private_ids
 LOG = logging.getLogger(__name__)
 
 from typing import Any
+
+
+def _parse_reply_decision(decision: str) -> bool:
+    first = (decision or "").strip().split()
+    if not first:
+        return False
+    return first[0].strip(" .,:;!?\n\t").upper() == "REPLY"
