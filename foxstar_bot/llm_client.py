@@ -5,6 +5,8 @@ from typing import Any
 
 from .config import ModelConfig
 
+REQUEST_TIMEOUT = 25.0
+
 
 class LLMClient:
     def __init__(self, api_key: str, model_config: ModelConfig) -> None:
@@ -12,9 +14,11 @@ class LLMClient:
             raise RuntimeError("OPENAI_API_KEY 未配置")
         try:
             from openai import OpenAI
+            import httpx
         except Exception as exc:
             raise RuntimeError("需要安装 openai Python SDK") from exc
-        self.client = OpenAI(api_key=api_key, timeout=35.0, max_retries=1)
+        timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=20.0, write=10.0, pool=5.0)
+        self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
         self.config = model_config
 
     def chat(self, messages: list[dict[str, Any]]) -> str:
