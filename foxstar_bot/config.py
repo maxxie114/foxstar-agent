@@ -23,6 +23,8 @@ class ToolConfig:
 
     vision_enabled: bool = True
 
+    auto_memory_enabled: bool = True
+
 @dataclass(frozen=True)
 class ModelConfig:
     name: str = "gpt-4.1-mini"
@@ -35,6 +37,12 @@ class StorageConfig:
     sqlite_path: Path = Path("data/foxstar.sqlite3")
     files_dir: Path = Path("data/files")
     images_dir: Path = Path("data/images")
+
+@dataclass
+class ReplyTimingConfig:
+    min_delay_seconds: float = 3.0
+    max_delay_seconds: float = 5.0
+    between_messages_seconds: float = 1.0
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -52,3 +60,4 @@ class AppConfig:
     tools: ToolConfig = field(default_factory=ToolConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    reply_timing: ReplyTimingConfig = field(default_factory=ReplyTimingConfig)
