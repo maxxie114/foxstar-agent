@@ -41,11 +41,28 @@ def wechat_appmsg_type(content: str) -> str:
     return _find_text(root, ".//appmsg/type")
 
 
+def wechat_image_length(content: str) -> int | None:
+    stripped = (content or "").strip()
+    if "<msg" not in stripped[:200]:
+        return None
+    root = _parse_xml(stripped)
+    if root is None:
+        return None
+    img = root.find(".//img")
+    if img is None:
+        return None
+    length = img.attrib.get("length") or img.attrib.get("hdlength")
+    if not length or not length.isdigit():
+        return None
+    return int(length)
+
+
 def _render_quote_message(root: ElementTree.Element) -> str:
     title = _clean_text(_find_text(root, ".//appmsg/title"))
     quoted_author = _clean_text(_find_text(root, ".//refermsg/displayname"))
     quoted_user = _clean_text(_find_text(root, ".//refermsg/chatusr"))
-    quoted = _clean_text(_find_text(root, ".//refermsg/content"))
+    quoted_type = _find_text(root, ".//refermsg/type")
+    quoted = _clean_quoted_text(_find_text(root, ".//refermsg/content"), quoted_type)
 
     lines = ["[引用消息]"]
     if title:
@@ -88,4 +105,13 @@ def _clean_text(text: str) -> str:
     value = unescape(text or "")
     value = re.sub(r"<msgsource>.*?</msgsource>", " ", value, flags=re.DOTALL)
     value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _clean_quoted_text(text: str, msg_type: str) -> str:
+    value = _clean_text(text)
+    if value.startswith("<?xml") or value.startswith("<msg"):
+        normalized = normalize_wechat_content(value, int(msg_type) if msg_type.isdigit() else 0)
+        if normalized != value:
+            return normalized
     return value
