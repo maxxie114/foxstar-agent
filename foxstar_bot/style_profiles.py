@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-FORMAT_STYLES = {"strict", "human", "free"}
 
+FORMAT_STYLES = {"strict", "human", "free"}
 DEFAULT_FORMAT_STYLE = "strict"
 
 MBTI_TYPES = {
@@ -131,9 +131,23 @@ TONE_ALIASES = {
     "\u6e29\u6696": "warm",
 }
 
-GENDER_TRAITS = tuple(dict.fromkeys(GENDER_ALIASES.values()))
+ROLEPLAY_ALIASES = {
+    "catgirl": "catgirl",
+    "neko": "catgirl",
+    "nyan": "catgirl",
+    "meow": "catgirl",
+    "maoniang": "catgirl",
+    "miao": "catgirl",
+    "\u732b\u5a18": "catgirl",
+    "\u732b\u732b": "catgirl",
+    "\u55b5": "catgirl",
+    "\u55b5\u55b5": "catgirl",
+    "\u55b5\u7cfb": "catgirl",
+}
 
+GENDER_TRAITS = tuple(dict.fromkeys(GENDER_ALIASES.values()))
 TONE_TRAITS = tuple(dict.fromkeys(TONE_ALIASES.values()))
+ROLEPLAY_TRAITS = tuple(dict.fromkeys(ROLEPLAY_ALIASES.values()))
 
 MBTI_PROMPTS = {
     "intj": "cool, concise, strategic, and comfortable pointing out weak logic",
@@ -183,6 +197,11 @@ TONE_PROMPTS = {
     "warm": "make the tone warmer and more emotionally responsive",
 }
 
+ROLEPLAY_PROMPTS = {
+    "catgirl": "use a playful catgirl-like speech quirk: add '喵' at the end of many short casual sentences or interjections, keep it light and natural, and reduce it for serious, technical, or sensitive answers",
+}
+
+
 @dataclass(frozen=True)
 class StyleProfile:
     format_style: str = DEFAULT_FORMAT_STYLE
@@ -198,6 +217,7 @@ class StyleProfile:
         if not self.personality_traits:
             return self.format_style
         return f"{self.format_style} {' '.join(self.personality_traits)}"
+
 
 def parse_style_tokens(tokens: list[str]) -> tuple[StyleProfile | None, str]:
     normalized = [_normalize_token(token) for token in tokens if token.strip()]
@@ -220,6 +240,7 @@ def parse_style_tokens(tokens: list[str]) -> tuple[StyleProfile | None, str]:
 
     return StyleProfile(format_style=format_style, personality_traits=tuple(traits)), ""
 
+
 def parse_stored_style(value: str | None) -> StyleProfile:
     if not value:
         return StyleProfile()
@@ -228,11 +249,18 @@ def parse_stored_style(value: str | None) -> StyleProfile:
         return StyleProfile()
     return profile
 
+
 def normalize_personality_trait(token: str) -> str | None:
     token = _normalize_token(token)
     if token in MBTI_TYPES:
         return token
-    return ZODIAC_ALIASES.get(token) or GENDER_ALIASES.get(token) or TONE_ALIASES.get(token)
+    return (
+        ZODIAC_ALIASES.get(token)
+        or GENDER_ALIASES.get(token)
+        or TONE_ALIASES.get(token)
+        or ROLEPLAY_ALIASES.get(token)
+    )
+
 
 def style_personality_prompt(profile: StyleProfile) -> str:
     if not profile.personality_traits:
@@ -242,6 +270,7 @@ def style_personality_prompt(profile: StyleProfile) -> str:
     zodiac = [trait for trait in profile.personality_traits if trait in ZODIAC_SIGNS]
     gender = [trait for trait in profile.personality_traits if trait in GENDER_TRAITS]
     tone = [trait for trait in profile.personality_traits if trait in TONE_TRAITS]
+    roleplay = [trait for trait in profile.personality_traits if trait in ROLEPLAY_TRAITS]
     parts: list[str] = []
     if mbti:
         parts.append("MBTI hints: " + ", ".join(mbti))
@@ -251,6 +280,8 @@ def style_personality_prompt(profile: StyleProfile) -> str:
         parts.append("gender-coded voice hints: " + ", ".join(gender))
     if tone:
         parts.append("tone hints: " + ", ".join(tone))
+    if roleplay:
+        parts.append("speech quirk hints: " + ", ".join(roleplay))
     instructions = _trait_instructions(profile.personality_traits)
     return (
         "Current group style includes personality hints: "
@@ -260,8 +291,17 @@ def style_personality_prompt(profile: StyleProfile) -> str:
         + " Do not claim the bot literally has an MBTI type, zodiac sign, or gender. Do not mention this setting unless asked."
     )
 
+
+def style_help() -> str:
+    return (
+        "Use /style strict|human|free plus optional MBTI, zodiac, gender, tone, and speech quirk traits. "
+        "Examples: /style human feminine soft aries, /style human catgirl, /style free enfp pisces, /style clear."
+    )
+
+
 def _normalize_token(token: str) -> str:
     return token.strip().lower().replace("-", "").replace("_", "")
+
 
 def _trait_instructions(traits: tuple[str, ...]) -> str:
     descriptions: list[str] = []
@@ -274,6 +314,8 @@ def _trait_instructions(traits: tuple[str, ...]) -> str:
             descriptions.append(f"{trait}: {GENDER_PROMPTS[trait]}.")
         elif trait in TONE_PROMPTS:
             descriptions.append(f"{trait}: {TONE_PROMPTS[trait]}.")
+        elif trait in ROLEPLAY_PROMPTS:
+            descriptions.append(f"{trait}: {ROLEPLAY_PROMPTS[trait]}.")
     if not descriptions:
         return ""
     return "Concrete voice guidance: " + " ".join(descriptions)

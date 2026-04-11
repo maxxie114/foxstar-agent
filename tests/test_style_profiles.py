@@ -47,3 +47,21 @@ def test_feminine_prompt_is_voice_not_identity():
     assert "softer" in prompt
     assert "aries" in prompt
     assert "do not claim to be a woman" in prompt
+
+
+def test_parse_style_accepts_catgirl_aliases():
+    style, error = parse_style_tokens(["human", "猫娘"])
+
+    assert error == ""
+    assert style is not None
+    assert style.storage_value == "human catgirl"
+
+
+def test_catgirl_prompt_adds_meow_quirk():
+    style = parse_stored_style("human catgirl")
+
+    prompt = style_personality_prompt(style)
+
+    assert "speech quirk" in prompt
+    assert "喵" in prompt
+    assert "serious, technical, or sensitive" in prompt
