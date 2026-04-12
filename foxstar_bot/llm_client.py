@@ -149,3 +149,21 @@ class LLMClient:
         text = text.strip()
         LOG.info("gemini vision raw response image=%s chars=%s text=%r", image_path, len(text), text[:1000])
         return text
+
+def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: Any, **kwargs: Any) -> Any:
+    result: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+    def run() -> None:
+        try:
+            result.put((True, func(*args, **kwargs)))
+        except Exception as exc:
+            result.put((False, exc))
+
+    Thread(target=run, name=f"OpenAI-{label}", daemon=True).start()
+    try:
+        ok, value = result.get(timeout=hard_timeout)
+    except Empty as exc:
+        raise TimeoutError(f"{label} hard timeout after {hard_timeout:.1f}s") from exc
+    if ok:
+        return value
+    raise value
