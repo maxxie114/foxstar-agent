@@ -45,6 +45,8 @@ class LLMClient:
         max_completion_tokens: int | None = None,
         model: str | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
         timeout: float | None = None,
     ) -> str:
         kwargs: dict[str, Any] = {
@@ -55,8 +57,21 @@ class LLMClient:
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if reasoning_effort is not None:
+            kwargs["reasoning_effort"] = reasoning_effort
+        if verbosity is not None:
+            kwargs["verbosity"] = verbosity
         response = self.client.chat.completions.create(**kwargs)
-        return (response.choices[0].message.content or "").strip()
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "chat completion returned empty content model=%s finish_reason=%s usage=%s",
+                kwargs["model"],
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
