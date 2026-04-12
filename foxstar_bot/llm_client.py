@@ -44,15 +44,18 @@ class LLMClient:
         *,
         max_completion_tokens: int | None = None,
         model: str | None = None,
+        temperature: float | None = None,
         timeout: float | None = None,
     ) -> str:
-        response = self.client.chat.completions.create(
-            model=model or self.config.name,
-            messages=messages,
-            temperature=self.config.temperature,
-            max_completion_tokens=max_completion_tokens or self.config.max_output_tokens,
-            timeout=timeout,
-        )
+        kwargs: dict[str, Any] = {
+            "model": model or self.config.name,
+            "messages": messages,
+            "max_completion_tokens": max_completion_tokens or self.config.max_output_tokens,
+            "timeout": timeout,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = self.client.chat.completions.create(**kwargs)
         return (response.choices[0].message.content or "").strip()
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
