@@ -43,10 +43,11 @@ class LLMClient:
         messages: list[dict[str, Any]],
         *,
         max_completion_tokens: int | None = None,
+        model: str | None = None,
         timeout: float | None = None,
     ) -> str:
         response = self.client.chat.completions.create(
-            model=self.config.name,
+            model=model or self.config.name,
             messages=messages,
             temperature=self.config.temperature,
             max_completion_tokens=max_completion_tokens or self.config.max_output_tokens,
@@ -105,10 +106,10 @@ class LLMClient:
             ],
             "generationConfig": {
                 "temperature": 0.2,
-                "maxOutputTokens": min(self.config.max_output_tokens, 800),
+                "maxOutputTokens": 8192,
             },
         }
-        timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=20.0, write=10.0, pool=5.0)
+        timeout = httpx.Timeout(90.0, connect=10.0, read=75.0, write=30.0, pool=5.0)
         with httpx.Client(timeout=timeout) as client:
             response = client.post(url, headers={"x-goog-api-key": self.gemini_api_key}, json=payload)
             response.raise_for_status()
@@ -117,4 +118,6 @@ class LLMClient:
         text = "\n".join(part.get("text", "") for part in parts if part.get("text"))
         if not text.strip():
             raise RuntimeError("Gemini returned no text")
-        return text.strip()
+        text = text.strip()
+        LOG.info("gemini vision raw response image=%s chars=%s text=%r", image_path, len(text), text[:1000])
+        return text

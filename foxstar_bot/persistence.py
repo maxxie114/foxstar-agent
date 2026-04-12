@@ -106,6 +106,17 @@ class Database:
                     last_at REAL NOT NULL DEFAULT 0,
                     PRIMARY KEY(key, bucket_date)
                 );
+
+                CREATE TABLE IF NOT EXISTS chat_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    user_id TEXT,
+                    display_name TEXT,
+                    raw_content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_chat_events_chat_time ON chat_events(chat_id, created_at);
                 """
             )
 

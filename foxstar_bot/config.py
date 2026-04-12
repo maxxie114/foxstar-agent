@@ -29,6 +29,8 @@ class ToolConfig:
 class ModelConfig:
     name: str = "gpt-4.1-mini"
 
+    reply_gate_model: str = "gpt-5-nano"
+
     vision_model: str = "gpt-4.1-mini"
 
     vision_provider: str = "openai"
