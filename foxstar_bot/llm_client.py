@@ -10,6 +10,10 @@ import logging
 
 import mimetypes
 
+from queue import Empty, Queue
+
+from threading import Thread
+
 from typing import Any
 
 from urllib.parse import quote
@@ -49,11 +53,12 @@ class LLMClient:
         verbosity: str | None = None,
         timeout: float | None = None,
     ) -> str:
+        api_timeout = float(timeout or REQUEST_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model or self.config.name,
             "messages": messages,
             "max_completion_tokens": max_completion_tokens or self.config.max_output_tokens,
-            "timeout": timeout,
+            "timeout": api_timeout,
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
@@ -61,7 +66,12 @@ class LLMClient:
             kwargs["reasoning_effort"] = reasoning_effort
         if verbosity is not None:
             kwargs["verbosity"] = verbosity
-        response = self.client.chat.completions.create(**kwargs)
+        response = _call_with_hard_timeout(
+            "chat.completions",
+            api_timeout + 2.0,
+            self.client.chat.completions.create,
+            **kwargs,
+        )
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
