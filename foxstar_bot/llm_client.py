@@ -52,10 +52,13 @@ class LLMClient:
         reasoning_effort: str | None = None,
         verbosity: str | None = None,
         timeout: float | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_retention: str | None = None,
     ) -> str:
+        model_name = model or self.config.name
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         kwargs: dict[str, Any] = {
-            "model": model or self.config.name,
+            "model": model_name,
             "messages": messages,
             "max_completion_tokens": max_completion_tokens or self.config.max_output_tokens,
             "timeout": api_timeout,
@@ -66,12 +69,18 @@ class LLMClient:
             kwargs["reasoning_effort"] = reasoning_effort
         if verbosity is not None:
             kwargs["verbosity"] = verbosity
+        if prompt_cache_key:
+            kwargs["prompt_cache_key"] = prompt_cache_key
+        retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
+        if retention:
+            kwargs["prompt_cache_retention"] = retention
         response = _call_with_hard_timeout(
             "chat.completions",
             api_timeout + 2.0,
             self.client.chat.completions.create,
             **kwargs,
         )
+        _log_prompt_cache_usage("chat.completions", model_name, getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -79,6 +88,61 @@ class LLMClient:
                 "chat completion returned empty content model=%s finish_reason=%s usage=%s",
                 kwargs["model"],
                 getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
+    def responses_text(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_output_tokens: int | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        timeout: float | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_retention: str | None = None,
+    ) -> str:
+        model_name = model or self.config.name
+        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
+        input_items = [
+            {"role": item["role"], "content": item["content"]}
+            for item in messages
+            if item.get("role") in {"user", "assistant"}
+        ]
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "instructions": instructions,
+            "input": input_items,
+            "max_output_tokens": max_output_tokens or self.config.max_output_tokens,
+            "timeout": api_timeout,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if reasoning_effort is not None:
+            kwargs["reasoning"] = {"effort": reasoning_effort}
+        if verbosity is not None:
+            kwargs["text"] = {"verbosity": verbosity}
+        if prompt_cache_key:
+            kwargs["prompt_cache_key"] = prompt_cache_key
+        retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
+        if retention:
+            kwargs["prompt_cache_retention"] = retention
+        response = _call_with_hard_timeout(
+            "responses.create",
+            api_timeout + 2.0,
+            self.client.responses.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
+        content = (response.output_text or "").strip()
+        if not content:
+            LOG.warning(
+                "responses returned empty text model=%s usage=%s",
+                kwargs["model"],
                 getattr(response, "usage", None),
             )
         return content
@@ -167,3 +231,45 @@ def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: A
     if ok:
         return value
     raise value
+
+def _default_prompt_cache_retention(model: str) -> str:
+    model_name = (model or "").lower()
+    if (
+        model_name.startswith("gpt-5.4")
+        or model_name.startswith("gpt-5.2")
+        or model_name.startswith("gpt-5.1")
+        or model_name.startswith("gpt-5-codex")
+        or model_name == "gpt-5"
+        or model_name.startswith("gpt-4.1")
+        or model_name.startswith("gp5-5.1-codex-max")
+    ):
+        return "24h"
+    return ""
+
+def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
+    if usage is None:
+        return
+    total = _usage_value(usage, "prompt_tokens")
+    cached = _usage_nested_value(usage, "prompt_tokens_details", "cached_tokens")
+    if total is None:
+        total = _usage_value(usage, "input_tokens")
+    if cached is None:
+        cached = _usage_nested_value(usage, "input_tokens_details", "cached_tokens")
+    if total is None and cached is None:
+        return
+    LOG.debug("prompt_cache api=%s model=%s cached_tokens=%s input_tokens=%s", api, model, cached or 0, total or 0)
+
+def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
+    parent_value = _usage_value(usage, parent)
+    if parent_value is None:
+        return None
+    if isinstance(parent_value, dict):
+        value = parent_value.get(child)
+    else:
+        value = getattr(parent_value, child, None)
+    return value if isinstance(value, int) else None
+
+def _usage_value(usage: Any, key: str) -> Any:
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None)
