@@ -4,11 +4,19 @@ from pathlib import Path
 
 import json
 
+import logging
+
 from typing import Any
 
 from .config import ModelConfig
 
 REQUEST_TIMEOUT = 25.0
+
+REPLY_GATE_TIMEOUT = 6.0
+
+RESPONSES_TIMEOUT = 18.0
+
+LOG = logging.getLogger(__name__)
 
 class LLMClient:
     def __init__(self, api_key: str, model_config: ModelConfig) -> None:
@@ -23,12 +31,19 @@ class LLMClient:
         self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
         self.config = model_config
 
-    def chat(self, messages: list[dict[str, Any]]) -> str:
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_completion_tokens: int | None = None,
+        timeout: float | None = None,
+    ) -> str:
         response = self.client.chat.completions.create(
             model=self.config.name,
             messages=messages,
             temperature=self.config.temperature,
-            max_completion_tokens=self.config.max_output_tokens,
+            max_completion_tokens=max_completion_tokens or self.config.max_output_tokens,
+            timeout=timeout,
         )
         return (response.choices[0].message.content or "").strip()
 

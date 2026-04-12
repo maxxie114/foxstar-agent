@@ -24,3 +24,13 @@ def _parse_reply_decision(decision: str) -> bool:
     if not first:
         return False
     return first[0].strip(" .,:;!?\n\t").upper() == "REPLY"
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        name = current.__class__.__name__.lower()
+        if "timeout" in name:
+            return True
+        current = current.__cause__
+    return False
