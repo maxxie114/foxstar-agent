@@ -28,8 +28,13 @@ class ToolConfig:
 @dataclass(frozen=True)
 class ModelConfig:
     name: str = "gpt-4.1-mini"
+
     vision_model: str = "gpt-4.1-mini"
+
+    vision_provider: str = "openai"
+
     temperature: float = 0.4
+
     max_output_tokens: int = 700
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class AppConfig:
     whitelist_room_ids: list[str] = field(default_factory=list)
     manual_debug: bool = False
     openai_api_key: str = ""
+    gemini_api_key: str = ""
     tavily_api_key: str = ""
     exa_api_key: str = ""
     log_level: str = "INFO"
