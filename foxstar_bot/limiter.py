@@ -38,7 +38,7 @@ class RateLimiter:
                 ).fetchone()
                 count = int(row["count"]) if row else 0
                 last_at = float(row["last_at"]) if row else 0
-                if count >= daily_limit:
+                if daily_limit > 0 and count >= daily_limit:
                     return LimitResult(False, "daily_limit")
                 if now - last_at < cooldown:
                     return LimitResult(False, "cooldown")

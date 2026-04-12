@@ -12,8 +12,8 @@ from typing import Any
 class RateLimitConfig:
     user_cooldown_seconds: int = 15
     group_cooldown_seconds: int = 8
-    user_daily_limit: int = 50
-    group_daily_limit: int = 300
+    user_daily_limit: int = 0
+    group_daily_limit: int = 0
 
 @dataclass(frozen=True)
 class ToolConfig:
