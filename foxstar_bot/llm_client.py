@@ -10,6 +10,8 @@ import logging
 
 import mimetypes
 
+import time
+
 from queue import Empty, Queue
 
 from threading import Thread
@@ -131,12 +133,7 @@ class LLMClient:
         retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
         if retention:
             kwargs["prompt_cache_retention"] = retention
-        response = _call_with_hard_timeout(
-            "responses.create",
-            api_timeout + 2.0,
-            self.client.responses.create,
-            **kwargs,
-        )
+        response = _openai_call_with_retry("responses.create", api_timeout + 2.0, self.client.responses.create, **kwargs)
         _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
         content = (response.output_text or "").strip()
         if not content:
@@ -231,6 +228,25 @@ def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: A
     if ok:
         return value
     raise value
+
+def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs: Any) -> Any:
+    for attempt in range(2):
+        try:
+            return _call_with_hard_timeout(label, hard_timeout, func, **kwargs)
+        except Exception as exc:
+            if attempt == 0 and _is_retryable_openai_error(exc):
+                LOG.warning("%s retrying after transient OpenAI error: %s", label, exc)
+                time.sleep(0.4)
+                continue
+            raise
+    raise RuntimeError("unreachable OpenAI retry state")
+
+def _is_retryable_openai_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and (status_code == 408 or status_code == 409 or status_code == 429 or status_code >= 500):
+        return True
+    name = exc.__class__.__name__.lower()
+    return "timeout" in name or "apierror" in name or "server" in name
 
 def _default_prompt_cache_retention(model: str) -> str:
     model_name = (model or "").lower()
