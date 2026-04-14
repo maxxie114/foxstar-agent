@@ -34,3 +34,16 @@ def test_split_reply_messages_keeps_more_information():
 
     assert len(messages) == 3
     assert "2.24" in messages[1]
+
+
+def test_split_reply_messages_does_not_hard_split_long_sentence():
+    text = "这是一整句很长的话，里面有逗号，也有很多补充说明，但是没有真正结束，所以不要因为长度把它拆成两条。"
+    messages = split_reply_messages(text, max_messages=3, max_line_chars=12, split_on_sentences=False)
+
+    assert messages == [text]
+
+
+def test_split_reply_messages_merges_standalone_wechat_emoji():
+    messages = split_reply_messages("又来这套？\n论证是空的。\n[白眼]", max_messages=3, split_on_sentences=False)
+
+    assert messages == ["又来这套？", "论证是空的。[白眼]"]

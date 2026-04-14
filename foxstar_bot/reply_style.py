@@ -54,3 +54,42 @@ def _normalize_lines(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", "\n", text)
     return text.strip()
+
+def _split_sentences(text: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if char in "。！？!?；;":
+            end = index + 1
+            while end < len(text) and text[end] in "」』】）)\"'":
+                end += 1
+            part = text[start:end].strip(" \n，,")
+            if part:
+                parts.append(part)
+            start = end
+            index = end
+            continue
+        index += 1
+    tail = text[start:].strip(" \n，,")
+    if tail:
+        parts.append(tail)
+    return parts or [text.strip()]
+
+def _merge_standalone_emoji_lines(lines: list[str]) -> list[str]:
+    merged: list[str] = []
+    for line in lines:
+        if _is_standalone_emoji(line) and merged:
+            merged[-1] = f"{merged[-1]}{line}"
+        else:
+            merged.append(line)
+    return merged
+
+def _is_standalone_emoji(text: str) -> bool:
+    value = text.strip()
+    if not value:
+        return False
+    if re.fullmatch(r"(?:\[[^\[\]\s]{1,8}\]){1,3}", value):
+        return True
+    return bool(re.fullmatch(r"[\U0001F300-\U0001FAFF\u2600-\u27BF]{1,4}", value))
