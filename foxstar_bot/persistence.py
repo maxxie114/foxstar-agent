@@ -119,6 +119,15 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_chat_events_chat_time ON chat_events(chat_id, created_at);
                 """
             )
+            for statement in (
+                "ALTER TABLE memories ADD COLUMN priority INTEGER NOT NULL DEFAULT 50",
+                "ALTER TABLE memories ADD COLUMN source_user_id TEXT",
+            ):
+                try:
+                    conn.execute(statement)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column name" not in str(exc).lower():
+                        raise
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self.connect() as conn:
