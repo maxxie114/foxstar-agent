@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from .persistence import Database, utc_now
 
-
 class ContextStore:
-    def __init__(self, db: Database, max_turns: int = 12) -> None:
-        self.db = db
-        self.max_turns = max_turns
-
     def add_message(self, chat_id: str, user_id: str, role: str, content: str, kind: str = "text") -> None:
         content = self._trim(content)
         if not content:
