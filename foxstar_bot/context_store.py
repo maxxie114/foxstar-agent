@@ -28,3 +28,23 @@ class ContextStore:
         if len(content) <= limit:
             return content
         return content[:limit] + "\n[内容已截断]"
+
+def _compact_content(content: str, limit: int = 110) -> str:
+    content = " ".join((content or "").split())
+    if not content or _is_low_signal_content(content):
+        return ""
+    content = content.replace("[引用消息]", "").strip()
+    content = content.replace("当前回复:", "reply:").replace("引用原文:", "quote:")
+    if len(content) > limit:
+        content = content[:limit].rstrip() + "..."
+    return content
+
+def _is_low_signal_content(content: str) -> bool:
+    value = content.strip()
+    if not value:
+        return True
+    if value.startswith("[图片") or value.startswith("[动画表情]"):
+        return True
+    if len(value) <= 8 and "[" in value and "]" in value:
+        return True
+    return False
