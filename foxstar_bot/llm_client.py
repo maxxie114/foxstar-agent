@@ -65,7 +65,7 @@ class LLMClient:
             "max_completion_tokens": max_completion_tokens or self.config.max_output_tokens,
             "timeout": api_timeout,
         }
-        if temperature is not None:
+        if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
         if reasoning_effort is not None:
             kwargs["reasoning_effort"] = reasoning_effort
@@ -122,7 +122,7 @@ class LLMClient:
             "max_output_tokens": max_output_tokens or self.config.max_output_tokens,
             "timeout": api_timeout,
         }
-        if temperature is not None:
+        if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
         if reasoning_effort is not None:
             kwargs["reasoning"] = {"effort": reasoning_effort}
@@ -155,9 +155,9 @@ class LLMClient:
     def _analyze_image_openai(self, image_path: Path, prompt: str) -> str:
         from .tool_vision import image_to_data_url
 
-        response = self.client.chat.completions.create(
-            model=self.config.vision_model,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": self.config.vision_model,
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -166,9 +166,11 @@ class LLMClient:
                     ],
                 }
             ],
-            temperature=0.2,
-            max_completion_tokens=min(self.config.max_output_tokens, 600),
-        )
+            "max_completion_tokens": min(self.config.max_output_tokens, 600),
+        }
+        if _model_supports_temperature(self.config.vision_model):
+            kwargs["temperature"] = 0.2
+        response = self.client.chat.completions.create(**kwargs)
         return (response.choices[0].message.content or "").strip()
 
     def _analyze_image_gemini(self, image_path: Path, prompt: str) -> str:
@@ -261,6 +263,12 @@ def _default_prompt_cache_retention(model: str) -> str:
     ):
         return "24h"
     return ""
+
+def _model_supports_temperature(model: str) -> bool:
+    model_name = (model or "").lower()
+    if model_name.startswith("gpt-5") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
+        return False
+    return True
 
 def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
     if usage is None:
