@@ -35,6 +35,10 @@ class ModelConfig:
 
     vision_provider: str = "openai"
 
+    reasoning_effort: str = "medium"
+
+    verbosity: str = "medium"
+
     temperature: float = 0.4
 
     max_output_tokens: int = 700
