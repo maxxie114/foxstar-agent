@@ -25,6 +25,8 @@ class ToolConfig:
 
     auto_memory_enabled: bool = True
 
+    code_execution_enabled: bool = False
+
 @dataclass(frozen=True)
 class ModelConfig:
     name: str = "gpt-4.1-mini"

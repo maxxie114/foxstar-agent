@@ -27,6 +27,24 @@ class DocumentTool:
             )
         return text
 
+    def latest_for_prompt(self, chat_id: str, limit: int = 6000) -> str:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT file_path, file_type, extracted_text, created_at
+                FROM files
+                WHERE chat_id = ? AND COALESCE(extracted_text, '') != ''
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (chat_id,),
+            ).fetchone()
+        if row is None:
+            return ""
+        name = Path(str(row["file_path"])).name
+        header = f"最近上传文档：{name} ({row['file_type']}, {row['created_at']})\n"
+        return header + self.summarize_for_prompt(str(row["extracted_text"] or ""), limit=limit)
+
     def _save_copy(self, path: Path) -> Path:
         target = self.files_dir / path.name
         if path.resolve() != target.resolve():
