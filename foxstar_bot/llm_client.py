@@ -198,6 +198,96 @@ class LLMClient:
             )
         return content
 
+    def web_search(
+        self,
+        query: str,
+        *,
+        model: str = "gpt-5",
+        reasoning_effort: str = "low",
+        max_output_tokens: int = 6000,
+        timeout: float = 55.0,
+    ) -> str:
+        search_query = " ".join((query or "").split()).strip()
+        if not search_query:
+            raise ValueError("web search query is empty")
+        instructions = (
+            "You are a fast web search subagent for a WeChat group assistant. "
+            f"Current realtime context: {_california_time_context()}. "
+            "Use web_search to investigate the query, open/read relevant pages when needed, "
+            "then return a compact Chinese research brief with source names and URLs. "
+            "Do not run deep research; finish within a small number of searches/pages. "
+            "For time-sensitive queries, prioritize sources from today, the last 7 days, and the current year before older background. "
+            "If the user names a specific source, publication, paywalled outlet, or report, explicitly search for that source first. "
+            "Do not silently replace a named source with weaker reprints; if the original source is unavailable, say so and label reprints as secondary. "
+            "Separate verified facts from rumors, uncertainty, and source conflicts. "
+            "Include the most important URLs inline, but keep the final brief concise enough to be passed to another model."
+        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "instructions": instructions,
+            "input": search_query,
+            "tools": [{"type": "web_search"}],
+            "max_output_tokens": max(1200, min(int(max_output_tokens or 6000), 10000)),
+            "timeout": timeout,
+        }
+        effort = (reasoning_effort or "").strip().lower()
+        if effort and effort not in {"none", "off", "false", "0"}:
+            kwargs["reasoning"] = {"effort": effort}
+        LOG.info(
+            "openai_web_search request model=%s reasoning=%s max_output_tokens=%s query=%r",
+            model,
+            effort or "default",
+            kwargs["max_output_tokens"],
+            search_query,
+        )
+        response = _openai_call_with_retry("responses.web_search", timeout + 5.0, self.client.responses.create, **kwargs)
+        if _response_incomplete_reason(response) == "max_output_tokens" and kwargs["max_output_tokens"] < 10000:
+            LOG.warning(
+                "openai_web_search incomplete retry model=%s response_id=%s old_max_output_tokens=%s",
+                model,
+                getattr(response, "id", ""),
+                kwargs["max_output_tokens"],
+            )
+            retry_kwargs = dict(kwargs)
+            retry_kwargs["max_output_tokens"] = 10000
+            retry_kwargs["input"] = (
+                f"{search_query}\n\n"
+                "The previous web_search report was cut off. Search again if needed, but produce a complete compact brief. "
+                "Prioritize the original/named source, newest information, and at most 8 high-quality sources. "
+                "Do not write a long background article."
+            )
+            response = _openai_call_with_retry("responses.web_search.retry", timeout + 25.0, self.client.responses.create, **retry_kwargs)
+        output_items = list(getattr(response, "output", None) or [])
+        LOG.info(
+            "openai_web_search response model=%s response_id=%s status=%s incomplete=%s output_items=%s chars=%s",
+            model,
+            getattr(response, "id", ""),
+            getattr(response, "status", ""),
+            getattr(response, "incomplete_details", None),
+            len(output_items),
+            len(getattr(response, "output_text", "") or ""),
+        )
+        _log_prompt_cache_usage("responses.web_search", model, getattr(response, "usage", None))
+        for item in output_items:
+            item_type = getattr(item, "type", "")
+            if item_type == "web_search_call":
+                action = getattr(item, "action", None)
+                LOG.info(
+                    "openai_web_search tool_call id=%s status=%s action=%s",
+                    getattr(item, "id", ""),
+                    getattr(item, "status", ""),
+                    _compact_json(action),
+                )
+        citations = _response_url_citations(output_items)
+        if citations:
+            LOG.info("openai_web_search citations count=%s urls=%s", len(citations), [item.get("url", "") for item in citations[:8]])
+        else:
+            LOG.warning("openai_web_search citations missing response_id=%s", getattr(response, "id", ""))
+        text = (getattr(response, "output_text", "") or "").strip()
+        if not text:
+            raise RuntimeError("OpenAI web_search returned empty text")
+        return text
+
     def chat_with_tools(
         self,
         messages: list[dict[str, Any]],
@@ -676,6 +766,12 @@ def _is_retryable_openai_error(exc: Exception) -> bool:
         return True
     name = exc.__class__.__name__.lower()
     return "timeout" in name or "apierror" in name or "server" in name
+
+def _response_incomplete_reason(response: Any) -> str:
+    if getattr(response, "status", "") != "incomplete":
+        return ""
+    details = getattr(response, "incomplete_details", None)
+    return str(getattr(details, "reason", "") or "")
 
 def _default_prompt_cache_retention(model: str) -> str:
     model_name = (model or "").lower()

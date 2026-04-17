@@ -315,6 +315,21 @@ def _page_note(page: ResearchPage, limit: int) -> str:
     text = " ".join((page.text or "").split())[:limit]
     return f"Title: {page.title}\nURL: {page.url}\nSource: {page.source}\nText: {text}"
 
+def _research_input(query: str, original_query: str) -> str:
+    query = " ".join((query or "").split()).strip()
+    original_query = " ".join((original_query or "").split()).strip()
+    if not original_query or original_query == query:
+        return query
+    return (
+        "Original user request:\n"
+        f"{original_query}\n\n"
+        "Model-proposed search query, possibly lossy:\n"
+        f"{query}\n\n"
+        "Research instruction:\n"
+        "Use the original request as authoritative. Preserve exact dates, named sources, outlets, amounts, entities, and requested information sources. "
+        "Rewrite/search in both Chinese and English when useful. Do not treat the model-proposed query as complete if it dropped constraints."
+    )
+
 def _strip_json_fence(text: str) -> str:
     value = (text or "").strip()
     if value.startswith("```"):
