@@ -28,6 +28,8 @@ REPLY_GATE_TIMEOUT = 6.0
 
 RESPONSES_TIMEOUT = 18.0
 
+OPENROUTER_TIMEOUT = 55.0
+
 LOG = logging.getLogger(__name__)
 
 class LLMClient:
@@ -88,7 +90,7 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
             )
-        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -176,6 +178,13 @@ class LLMClient:
             kwargs["prompt_cache_retention"] = retention
         response = _openai_call_with_retry("responses.create", api_timeout + 2.0, self.client.responses.create, **kwargs)
         _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
+        if getattr(response, "status", "") == "incomplete":
+            LOG.warning(
+                "responses incomplete model=%s details=%s usage=%s",
+                model_name,
+                getattr(response, "incomplete_details", None),
+                getattr(response, "usage", None),
+            )
         content = (response.output_text or "").strip()
         if not content:
             LOG.warning(
@@ -196,7 +205,7 @@ class LLMClient:
     ) -> str:
         if self.openrouter_client is None:
             raise RuntimeError("OPENROUTER_API_KEY is not configured")
-        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model_name,
             "messages": messages,

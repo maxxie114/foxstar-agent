@@ -29,11 +29,11 @@ class WebResearchAgent:
 
     def _fetch_result(self, result: SearchResult) -> ResearchPage | None:
         try:
-            page = self.url_fetch.fetch(result.url, limit=7000)
+            page = self.url_fetch.fetch(result.url, limit=4500)
             text = page.text or result.snippet
             title = page.title or result.title
             LOG.info("web_research fetched url=%s chars=%s", result.url, len(text or ""))
-            return ResearchPage(title=title, url=page.url, text=text[:7000], source=result.source)
+            return ResearchPage(title=title, url=page.url, text=text[:4500], source=result.source)
         except Exception as exc:
             LOG.warning("web_research fetch failed url=%s reason=%s", result.url, exc)
             snippet = (result.snippet or "").strip()
@@ -70,6 +70,41 @@ class WebResearchAgent:
         except Exception as exc:
             LOG.warning("web_research followup planning failed reason=%s", exc)
         return []
+
+    def _synthesize(self, original_query: str, searched: list[str], pages: list[ResearchPage]) -> str:
+        if not pages:
+            return f"Web research did not find usable pages.\nQueries searched: {searched}"
+        page_notes = "\n\n".join(_page_note(page, limit=1000) for page in pages[:6])
+        prompt = (
+            "You are a research subagent. Use only the fetched pages below. "
+            "Return a compact research brief for another chat model to use. "
+            "Do not write a long article. No Markdown headings. "
+            "Limit the answer to 6 short bullet lines plus uncertainty notes. "
+            "If sources are irrelevant or weak, say so clearly. "
+            "Keep price/time-sensitive claims tied to the source timestamp when available.\n\n"
+            f"Original query: {original_query}\n"
+            f"Queries searched: {searched}\n\n"
+            f"Fetched pages:\n{page_notes}"
+        )
+        try:
+            answer = self.llm.responses_text(
+                [
+                    {"role": "system", "content": "Produce a concise research brief in Chinese unless the query asks otherwise."},
+                    {"role": "user", "content": prompt},
+                ],
+                max_output_tokens=2400,
+                reasoning_effort="low",
+                verbosity="low",
+                timeout=25.0,
+            )
+        except Exception as exc:
+            LOG.warning("web_research synthesis failed reason=%s", exc)
+            answer = "Web research synthesis failed; raw fetched notes follow.\n" + page_notes[:6000]
+        sources = "\n".join(f"- {page.title or page.url}: {page.url}" for page in pages[:5])
+        answer = " ".join(answer.strip().split())
+        if len(answer) > 1800:
+            answer = answer[:1800].rstrip() + "..."
+        return f"Web research subagent result:\n{answer}\n\nSources checked:\n{sources}"
 
 def _page_note(page: ResearchPage, limit: int) -> str:
     text = " ".join((page.text or "").split())[:limit]
