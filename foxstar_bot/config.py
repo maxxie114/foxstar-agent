@@ -21,7 +21,12 @@ class ToolConfig:
     docs_enabled: bool = True
     vision_enabled: bool = True
     auto_memory_enabled: bool = True
+    web_research_provider: str = "openai"
+    openai_web_search_model: str = "gpt-5"
+    openai_web_search_reasoning_effort: str = "low"
+    openai_web_search_max_output_tokens: int = 3000
     preferred_search_provider: str = "exa"
+    exa_search_type: str = "auto"
     code_execution_enabled: bool = False
 
 @dataclass(frozen=True)

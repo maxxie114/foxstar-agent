@@ -35,6 +35,26 @@ class WebResearchAgent:
         self.url_fetch = url_fetch
         self.llm = llm
 
+    def _openai_web_search(self, query: str, *, run_id: str) -> str:
+        model = self.search.config.tools.openai_web_search_model or "gpt-5"
+        effort = self.search.config.tools.openai_web_search_reasoning_effort or "low"
+        max_tokens = self.search.config.tools.openai_web_search_max_output_tokens or 3000
+        LOG.info(
+            "web_research openai_web_search run=%s model=%s reasoning=%s max_output_tokens=%s",
+            run_id,
+            model,
+            effort,
+            max_tokens,
+        )
+        result = self.llm.web_search(
+            query,
+            model=model,
+            reasoning_effort=effort,
+            max_output_tokens=max_tokens,
+            timeout=55.0,
+        )
+        return f"OpenAI web_search subagent result:\n{result}"
+
     def _agentic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str) -> str:
         searched: list[str] = []
         fetched: list[ResearchPage] = []

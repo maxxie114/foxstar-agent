@@ -80,3 +80,18 @@ def render_search_results(results: list[SearchResult]) -> str:
         snippet = item.snippet.replace("\n", " ").strip()
         lines.append(f"{idx}. {item.title}\nURL: {item.url}\n摘要: {snippet[:500]}")
     return "\n".join(lines)
+
+def _exa_snippet(item: dict[str, Any]) -> str:
+    text = item.get("text") or item.get("summary") or ""
+    highlights = item.get("highlights") or []
+    if highlights:
+        rendered = []
+        for highlight in highlights:
+            if isinstance(highlight, str):
+                rendered.append(highlight)
+            elif isinstance(highlight, dict):
+                rendered.append(str(highlight.get("text") or highlight.get("highlight") or ""))
+        highlight_text = "\n".join(part for part in rendered if part.strip())
+        if highlight_text.strip():
+            text = highlight_text
+    return str(text)[:1600]

@@ -12,6 +12,8 @@ import mimetypes
 
 import time
 
+from datetime import datetime, timedelta, timezone
+
 from queue import Empty, Queue
 
 from threading import Thread
@@ -19,6 +21,8 @@ from threading import Thread
 from typing import Any
 
 from urllib.parse import quote
+
+from zoneinfo import ZoneInfo
 
 from .config import ModelConfig
 
@@ -687,6 +691,16 @@ def _default_prompt_cache_retention(model: str) -> str:
         return "24h"
     return ""
 
+def _california_time_context() -> str:
+    now = datetime.now(_california_tz())
+    return f"California time is {now.strftime('%Y-%m-%d %H:%M:%S %Z')} (ISO: {now.isoformat()})"
+
+def _california_tz() -> timezone:
+    try:
+        return ZoneInfo("America/Los_Angeles")
+    except Exception:
+        return timezone(timedelta(hours=-7), "America/Los_Angeles")
+
 def _compact_json(value: Any, limit: int = 900) -> str:
     if isinstance(value, str):
         text = value
@@ -699,6 +713,23 @@ def _compact_json(value: Any, limit: int = 900) -> str:
     if len(text) > limit:
         return text[:limit].rstrip() + "..."
     return text
+
+def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+    for item in output_items:
+        if getattr(item, "type", "") != "message":
+            continue
+        for content in list(getattr(item, "content", None) or []):
+            for annotation in list(getattr(content, "annotations", None) or []):
+                if getattr(annotation, "type", "") != "url_citation":
+                    continue
+                citations.append(
+                    {
+                        "url": str(getattr(annotation, "url", "") or ""),
+                        "title": str(getattr(annotation, "title", "") or ""),
+                    }
+                )
+    return citations
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
