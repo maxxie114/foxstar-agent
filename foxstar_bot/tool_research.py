@@ -39,8 +39,8 @@ class WebResearchAgent:
         searched: list[str] = []
         fetched: list[ResearchPage] = []
         started_at = time.monotonic()
-        max_search_calls = max(1, min(max_rounds * 2, 3))
-        max_pages = max(1, min(max_pages, 5))
+        max_search_calls = max(1, min(max_rounds + 1, 3))
+        max_pages = max(1, min(max_pages, 3))
 
         def budget_error() -> str | None:
             elapsed = time.monotonic() - started_at
@@ -155,7 +155,7 @@ class WebResearchAgent:
             reasoning_effort="medium",
             verbosity="low",
             provider="openai",
-            max_tool_rounds=max_search_calls + max_pages + 1,
+            max_tool_rounds=max_search_calls + max_pages,
         )
         LOG.info("web_research agent_return run=%s searched=%s fetched=%s answer_chars=%s", run_id, len(searched), len(fetched), len(answer or ""))
         return self._format_agent_report(answer, searched, fetched)

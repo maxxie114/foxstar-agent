@@ -1,25 +1,36 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import base64
+
 import json
+
 import logging
+
 import mimetypes
+
 import time
+
 from queue import Empty, Queue
+
 from threading import Thread
+
 from typing import Any
+
 from urllib.parse import quote
 
 from .config import ModelConfig
 
 REQUEST_TIMEOUT = 25.0
+
 REPLY_GATE_TIMEOUT = 6.0
+
 RESPONSES_TIMEOUT = 18.0
+
 OPENROUTER_TIMEOUT = 55.0
 
 LOG = logging.getLogger(__name__)
-
 
 class LLMClient:
     def __init__(
@@ -317,9 +328,36 @@ class LLMClient:
                             "output": json.dumps(result, ensure_ascii=False),
                         }
                     )
-            return ""
+            LOG.warning("llm_tool_budget_exhausted api=responses model=%s rounds=%s forcing_final_answer", model_name, tool_rounds)
+            return self._responses_final_from_items(
+                model_name,
+                instructions,
+                input_items,
+                max_output_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                prompt_cache_key=prompt_cache_key,
+                prompt_cache_retention=prompt_cache_retention,
+            )
         except Exception as exc:
             LOG.warning("responses tool call failed, falling back to chat completions: %s", exc)
+            if len(input_items) > len([item for item in messages if item.get("role") in {"user", "assistant"}]):
+                try:
+                    return self._responses_final_from_items(
+                        model_name,
+                        instructions,
+                        input_items,
+                        max_output_tokens=max_output_tokens or self.config.max_output_tokens,
+                        reasoning_effort=reasoning_effort,
+                        verbosity=verbosity,
+                        prompt_cache_key=prompt_cache_key,
+                        prompt_cache_retention=prompt_cache_retention,
+                    )
+                except Exception as final_exc:
+                    LOG.warning("responses forced final failed after tool error: %s", final_exc)
+                    rendered = _render_tool_outputs(input_items)
+                    if rendered:
+                        return rendered
             return self.chat(
                 messages,
                 model=model_name,
@@ -328,6 +366,51 @@ class LLMClient:
                 prompt_cache_retention=prompt_cache_retention,
                 provider=resolved_provider,
             )
+
+    def _responses_final_from_items(
+        self,
+        model_name: str,
+        instructions: str,
+        input_items: list[Any],
+        *,
+        max_output_tokens: int,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_retention: str | None = None,
+    ) -> str:
+        final_input = list(input_items)
+        final_input.append(
+            {
+                "role": "user",
+                "content": (
+                    "Tool budget is exhausted. Produce the final answer now using the tool results already available. "
+                    "Do not call any more tools. If evidence is incomplete, say what is incomplete and give the best concise conclusion."
+                ),
+            }
+        )
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "instructions": instructions,
+            "input": final_input,
+            "max_output_tokens": max_output_tokens,
+            "timeout": RESPONSES_TIMEOUT,
+        }
+        effort = (reasoning_effort or self.config.reasoning_effort or "").strip().lower()
+        if effort and effort not in {"none", "off", "false", "0"}:
+            kwargs["reasoning"] = {"effort": effort}
+        text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
+        if text_verbosity:
+            kwargs["text"] = {"verbosity": text_verbosity}
+        if prompt_cache_key:
+            kwargs["prompt_cache_key"] = prompt_cache_key
+        retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
+        if retention:
+            kwargs["prompt_cache_retention"] = retention
+        LOG.info("llm_tool_forced_final api=responses model=%s input_items=%s max_output_tokens=%s", model_name, len(final_input), max_output_tokens)
+        response = _openai_call_with_retry("responses.final", RESPONSES_TIMEOUT + 2.0, self.client.responses.create, **kwargs)
+        _log_prompt_cache_usage("responses.final", model_name, getattr(response, "usage", None))
+        return (response.output_text or "").strip()
 
     def _openrouter_chat(
         self,
@@ -472,7 +555,17 @@ class LLMClient:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
-        return ""
+        LOG.warning("llm_tool_budget_exhausted api=openrouter model=%s rounds=%s forcing_final_answer", model_name, tool_rounds)
+        chat_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Tool budget is exhausted. Produce the final answer now using the tool results already available. "
+                    "Do not call any more tools."
+                ),
+            }
+        )
+        return self._openrouter_chat(chat_messages, model_name, max_tokens=max_tokens)
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
@@ -543,7 +636,6 @@ class LLMClient:
         LOG.info("gemini vision raw response image=%s chars=%s text=%r", image_path, len(text), text[:1000])
         return text
 
-
 def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: Any, **kwargs: Any) -> Any:
     result: Queue[tuple[bool, Any]] = Queue(maxsize=1)
 
@@ -562,7 +654,6 @@ def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: A
         return value
     raise value
 
-
 def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs: Any) -> Any:
     for attempt in range(2):
         try:
@@ -575,14 +666,12 @@ def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs
             raise
     raise RuntimeError("unreachable OpenAI retry state")
 
-
 def _is_retryable_openai_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and (status_code == 408 or status_code == 409 or status_code == 429 or status_code >= 500):
         return True
     name = exc.__class__.__name__.lower()
     return "timeout" in name or "apierror" in name or "server" in name
-
 
 def _default_prompt_cache_retention(model: str) -> str:
     model_name = (model or "").lower()
@@ -598,7 +687,6 @@ def _default_prompt_cache_retention(model: str) -> str:
         return "24h"
     return ""
 
-
 def _compact_json(value: Any, limit: int = 900) -> str:
     if isinstance(value, str):
         text = value
@@ -612,7 +700,6 @@ def _compact_json(value: Any, limit: int = 900) -> str:
         return text[:limit].rstrip() + "..."
     return text
 
-
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
     if value in {"openai", "openrouter"}:
@@ -624,7 +711,6 @@ def _resolve_provider(provider: str | None, model: str) -> str:
         return "openai"
     return "openrouter"
 
-
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "function",
@@ -635,13 +721,11 @@ def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
     if model_name.startswith("gpt-5") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
         return False
     return True
-
 
 def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
     if usage is None:
@@ -656,7 +740,6 @@ def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
         return
     LOG.debug("prompt_cache api=%s model=%s cached_tokens=%s input_tokens=%s", api, model, cached or 0, total or 0)
 
-
 def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     parent_value = _usage_value(usage, parent)
     if parent_value is None:
@@ -666,7 +749,6 @@ def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     else:
         value = getattr(parent_value, child, None)
     return value if isinstance(value, int) else None
-
 
 def _usage_value(usage: Any, key: str) -> Any:
     if isinstance(usage, dict):
