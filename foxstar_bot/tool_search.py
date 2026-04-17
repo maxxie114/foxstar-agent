@@ -49,6 +49,7 @@ class SearchTool:
         return any(token in lowered for token in triggers)
 
     def _tavily(self, query: str, max_results: int) -> list[SearchResult]:
+        LOG.info("search provider=tavily query=%r max_results=%s", query, max_results)
         payload = {
             "api_key": self.config.tavily_api_key,
             "query": query,
@@ -59,7 +60,7 @@ class SearchTool:
         response = requests.post("https://api.tavily.com/search", json=payload, timeout=20)
         response.raise_for_status()
         data = response.json()
-        return [
+        results = [
             SearchResult(
                 title=item.get("title", ""),
                 url=item.get("url", ""),
@@ -68,26 +69,8 @@ class SearchTool:
             )
             for item in data.get("results", [])
         ]
-
-    def _exa(self, query: str, max_results: int) -> list[SearchResult]:
-        headers = {"x-api-key": self.config.exa_api_key, "Content-Type": "application/json"}
-        payload: dict[str, Any] = {
-            "query": query,
-            "numResults": max_results,
-            "contents": {"text": {"maxCharacters": 800}},
-        }
-        response = requests.post("https://api.exa.ai/search", headers=headers, json=payload, timeout=20)
-        response.raise_for_status()
-        data = response.json()
-        return [
-            SearchResult(
-                title=item.get("title", ""),
-                url=item.get("url", ""),
-                snippet=(item.get("text") or item.get("summary") or "")[:1200],
-                source="exa",
-            )
-            for item in data.get("results", [])
-        ]
+        LOG.info("search provider=tavily query=%r results=%s", query, len(results))
+        return results
 
 def render_search_results(results: list[SearchResult]) -> str:
     if not results:

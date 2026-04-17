@@ -18,13 +18,10 @@ class RateLimitConfig:
 @dataclass(frozen=True)
 class ToolConfig:
     web_search_enabled: bool = True
-
     docs_enabled: bool = True
-
     vision_enabled: bool = True
-
     auto_memory_enabled: bool = True
-
+    preferred_search_provider: str = "exa"
     code_execution_enabled: bool = False
 
 @dataclass(frozen=True)

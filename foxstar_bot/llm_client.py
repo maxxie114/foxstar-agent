@@ -1,36 +1,25 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import base64
-
 import json
-
 import logging
-
 import mimetypes
-
 import time
-
 from queue import Empty, Queue
-
 from threading import Thread
-
 from typing import Any
-
 from urllib.parse import quote
 
 from .config import ModelConfig
 
 REQUEST_TIMEOUT = 25.0
-
 REPLY_GATE_TIMEOUT = 6.0
-
 RESPONSES_TIMEOUT = 18.0
-
 OPENROUTER_TIMEOUT = 55.0
 
 LOG = logging.getLogger(__name__)
+
 
 class LLMClient:
     def __init__(
@@ -194,6 +183,152 @@ class LLMClient:
             )
         return content
 
+    def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        max_output_tokens: int | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        prompt_cache_key: str | None = None,
+        prompt_cache_retention: str | None = None,
+        provider: str | None = None,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        model_name = model or self.config.name
+        resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
+        if resolved_provider == "openrouter":
+            return self._openrouter_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if not tools:
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+                prompt_cache_key=prompt_cache_key,
+                prompt_cache_retention=prompt_cache_retention,
+                provider=resolved_provider,
+            )
+
+        instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
+        input_items: list[Any] = [
+            {"role": item["role"], "content": item["content"]}
+            for item in messages
+            if item.get("role") in {"user", "assistant"}
+        ]
+
+        try:
+            retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
+            tool_rounds = max(1, min(max_tool_rounds, 12))
+            for round_index in range(tool_rounds):
+                kwargs: dict[str, Any] = {
+                    "model": model_name,
+                    "instructions": instructions,
+                    "input": input_items,
+                    "tools": tools,
+                    "tool_choice": "auto",
+                    "parallel_tool_calls": False,
+                    "max_output_tokens": max_output_tokens or self.config.max_output_tokens,
+                    "timeout": RESPONSES_TIMEOUT,
+                }
+                if _model_supports_temperature(model_name):
+                    kwargs["temperature"] = self.config.temperature
+                effort = (reasoning_effort or self.config.reasoning_effort or "").strip().lower()
+                if effort and effort not in {"none", "off", "false", "0"}:
+                    kwargs["reasoning"] = {"effort": effort}
+                text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
+                if text_verbosity:
+                    kwargs["text"] = {"verbosity": text_verbosity}
+                if prompt_cache_key:
+                    kwargs["prompt_cache_key"] = prompt_cache_key
+                if retention:
+                    kwargs["prompt_cache_retention"] = retention
+                LOG.info(
+                    "llm_tool_request api=responses model=%s round=%s/%s input_items=%s tools=%s max_output_tokens=%s",
+                    model_name,
+                    round_index + 1,
+                    tool_rounds,
+                    len(input_items),
+                    [tool.get("name", "") for tool in tools],
+                    kwargs["max_output_tokens"],
+                )
+                response = _openai_call_with_retry(
+                    "responses.create",
+                    RESPONSES_TIMEOUT + 2.0,
+                    self.client.responses.create,
+                    **kwargs,
+                )
+                LOG.info(
+                    "llm_tool_response api=responses model=%s round=%s response_id=%s status=%s output_items=%s",
+                    model_name,
+                    round_index + 1,
+                    getattr(response, "id", ""),
+                    getattr(response, "status", ""),
+                    len(list(response.output or [])),
+                )
+                _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
+                output = list(response.output or [])
+                input_items.extend(output)
+                tool_calls = [item for item in output if getattr(item, "type", "") == "function_call"]
+                if not tool_calls:
+                    return (response.output_text or "").strip()
+
+                for call in tool_calls:
+                    LOG.info(
+                        "llm_tool_call api=responses model=%s round=%s name=%s call_id=%s args=%s",
+                        model_name,
+                        round_index + 1,
+                        call.name,
+                        call.call_id,
+                        _compact_json(call.arguments),
+                    )
+                    handler = tool_handlers.get(call.name)
+                    if handler is None:
+                        result = {"ok": False, "error": f"unknown tool: {call.name}"}
+                    else:
+                        try:
+                            args = json.loads(call.arguments or "{}")
+                            result = handler(**args)
+                        except Exception as exc:
+                            result = {"ok": False, "error": str(exc)}
+                    LOG.info(
+                        "llm_tool_result api=responses model=%s round=%s name=%s call_id=%s result=%s",
+                        model_name,
+                        round_index + 1,
+                        call.name,
+                        call.call_id,
+                        _compact_json(result),
+                    )
+                    if isinstance(result, dict) and result.get("__terminal_response__"):
+                        return str(result.get("text", "")).strip()
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call.call_id,
+                            "output": json.dumps(result, ensure_ascii=False),
+                        }
+                    )
+            return ""
+        except Exception as exc:
+            LOG.warning("responses tool call failed, falling back to chat completions: %s", exc)
+            return self.chat(
+                messages,
+                model=model_name,
+                temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+                prompt_cache_key=prompt_cache_key,
+                prompt_cache_retention=prompt_cache_retention,
+                provider=resolved_provider,
+            )
+
     def _openrouter_chat(
         self,
         messages: list[dict[str, Any]],
@@ -231,6 +366,113 @@ class LLMClient:
                 getattr(response, "usage", None),
             )
         return content
+
+    def _openrouter_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        if self.openrouter_client is None:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
+        chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": chat_messages,
+                "tools": chat_tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "max_tokens": max_tokens,
+                "timeout": OPENROUTER_TIMEOUT,
+            }
+            if _model_supports_temperature(model_name):
+                kwargs["temperature"] = self.config.temperature
+            LOG.info(
+                "llm_tool_request api=openrouter model=%s round=%s/%s messages=%s tools=%s max_tokens=%s",
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(chat_messages),
+                [tool.get("function", {}).get("name", "") for tool in chat_tools],
+                max_tokens,
+            )
+            response = _call_with_hard_timeout(
+                "openrouter.chat.completions",
+                OPENROUTER_TIMEOUT + 5.0,
+                self.openrouter_client.chat.completions.create,
+                **kwargs,
+            )
+            LOG.info(
+                "llm_tool_response api=openrouter model=%s round=%s finish_reason=%s",
+                model_name,
+                round_index + 1,
+                getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
+            )
+            _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
+            message = response.choices[0].message
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            if not tool_calls:
+                return (message.content or "").strip()
+            chat_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments or "{}",
+                            },
+                        }
+                        for call in tool_calls
+                    ],
+                }
+            )
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=openrouter model=%s round=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(call.function.arguments),
+                )
+                handler = tool_handlers.get(call.function.name)
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
+                else:
+                    try:
+                        args = json.loads(call.function.arguments or "{}")
+                        result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                LOG.info(
+                    "llm_tool_result api=openrouter model=%s round=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(result),
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                chat_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        return ""
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
@@ -301,6 +543,7 @@ class LLMClient:
         LOG.info("gemini vision raw response image=%s chars=%s text=%r", image_path, len(text), text[:1000])
         return text
 
+
 def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: Any, **kwargs: Any) -> Any:
     result: Queue[tuple[bool, Any]] = Queue(maxsize=1)
 
@@ -319,6 +562,7 @@ def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: A
         return value
     raise value
 
+
 def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs: Any) -> Any:
     for attempt in range(2):
         try:
@@ -331,12 +575,14 @@ def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs
             raise
     raise RuntimeError("unreachable OpenAI retry state")
 
+
 def _is_retryable_openai_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and (status_code == 408 or status_code == 409 or status_code == 429 or status_code >= 500):
         return True
     name = exc.__class__.__name__.lower()
     return "timeout" in name or "apierror" in name or "server" in name
+
 
 def _default_prompt_cache_retention(model: str) -> str:
     model_name = (model or "").lower()
@@ -352,6 +598,21 @@ def _default_prompt_cache_retention(model: str) -> str:
         return "24h"
     return ""
 
+
+def _compact_json(value: Any, limit: int = 900) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        return text[:limit].rstrip() + "..."
+    return text
+
+
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
     if value in {"openai", "openrouter"}:
@@ -363,6 +624,7 @@ def _resolve_provider(provider: str | None, model: str) -> str:
         return "openai"
     return "openrouter"
 
+
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "function",
@@ -373,11 +635,13 @@ def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
     if model_name.startswith("gpt-5") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
         return False
     return True
+
 
 def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
     if usage is None:
@@ -392,6 +656,7 @@ def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
         return
     LOG.debug("prompt_cache api=%s model=%s cached_tokens=%s input_tokens=%s", api, model, cached or 0, total or 0)
 
+
 def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     parent_value = _usage_value(usage, parent)
     if parent_value is None:
@@ -401,6 +666,7 @@ def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     else:
         value = getattr(parent_value, child, None)
     return value if isinstance(value, int) else None
+
 
 def _usage_value(usage: Any, key: str) -> Any:
     if isinstance(usage, dict):
