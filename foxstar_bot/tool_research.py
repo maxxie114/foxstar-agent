@@ -4,6 +4,8 @@ import json
 
 import logging
 
+import time
+
 from dataclasses import dataclass
 
 from typing import Any
@@ -17,6 +19,8 @@ from .tool_search import SearchResult, SearchTool
 from .tool_url import FetchedPage, UrlFetchTool
 
 LOG = logging.getLogger(__name__)
+
+AGENTIC_RESEARCH_TIMEOUT_SECONDS = 45.0
 
 @dataclass(frozen=True)
 class ResearchPage:
@@ -34,17 +38,27 @@ class WebResearchAgent:
     def _agentic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str) -> str:
         searched: list[str] = []
         fetched: list[ResearchPage] = []
-        max_search_calls = max(1, max_rounds * 2)
+        started_at = time.monotonic()
+        max_search_calls = max(1, min(max_rounds * 2, 4))
+        max_pages = max(1, min(max_pages, 5))
+
+        def budget_error() -> str | None:
+            elapsed = time.monotonic() - started_at
+            if elapsed > AGENTIC_RESEARCH_TIMEOUT_SECONDS:
+                return f"time budget exhausted ({elapsed:.1f}s)"
+            return None
 
         def search_web(query: str, max_results: int = 5) -> dict[str, Any]:
             search_query = " ".join(str(query or "").split()).strip()
             LOG.info("web_research tool_call run=%s tool=search_web query=%r max_results=%s", run_id, search_query, max_results)
+            if error := budget_error():
+                return {"ok": False, "error": error, "must_finish": True}
             if not search_query:
                 return {"ok": False, "error": "query is required"}
             if len(searched) >= max_search_calls:
-                return {"ok": False, "error": f"search budget exhausted ({max_search_calls})"}
+                return {"ok": False, "error": f"search budget exhausted ({max_search_calls})", "must_finish": True}
             searched.append(search_query)
-            results = self.search.search(search_query, max_results=max(1, min(int(max_results or 5), 8)))
+            results = self.search.search(search_query, max_results=max(1, min(int(max_results or 3), 5)))
             LOG.info("web_research tool_result run=%s tool=search_web query=%r results=%s", run_id, search_query, len(results))
             return {
                 "ok": True,
@@ -59,14 +73,16 @@ class WebResearchAgent:
         def fetch_url(url: str) -> dict[str, Any]:
             target = str(url or "").strip()
             LOG.info("web_research tool_call run=%s tool=fetch_url url=%s", run_id, target)
+            if error := budget_error():
+                return {"ok": False, "error": error, "must_finish": True}
             if not target.startswith(("http://", "https://")):
                 return {"ok": False, "error": "url must start with http:// or https://"}
             if len(fetched) >= max_pages:
-                return {"ok": False, "error": f"page budget exhausted ({max_pages})"}
-            page = self.url_fetch.fetch(target, limit=9000)
-            fetched.append(ResearchPage(title=page.title, url=page.url, text=page.text[:9000], source="fetch_url"))
+                return {"ok": False, "error": f"page budget exhausted ({max_pages})", "must_finish": True}
+            page = self.url_fetch.fetch(target, limit=5500)
+            fetched.append(ResearchPage(title=page.title, url=page.url, text=page.text[:5500], source="fetch_url"))
             LOG.info("web_research tool_result run=%s tool=fetch_url url=%s title=%r chars=%s", run_id, page.url, page.title, len(page.text or ""))
-            return {"ok": True, "url": page.url, "title": page.title, "text": page.text[:8000]}
+            return {"ok": True, "url": page.url, "title": page.title, "text": page.text[:5000]}
 
         def finish_research(report: str) -> dict[str, Any]:
             LOG.info("web_research tool_call run=%s tool=finish_research report_chars=%s searched=%s fetched=%s", run_id, len(str(report or "")), len(searched), len(fetched))
@@ -119,7 +135,8 @@ class WebResearchAgent:
             "2. Read the most relevant URLs with fetch_url; do not rely on snippets alone.\n"
             "3. If results are irrelevant, stale, too broad, or conflict, reformulate and search again.\n"
             "4. Prefer primary sources, official pages, reputable data providers, or directly relevant pages.\n"
-            "5. When enough evidence is gathered, call finish_research.\n\n"
+            "5. When enough evidence is gathered, call finish_research.\n"
+            "6. If any tool returns must_finish=true or a budget error, immediately call finish_research with the evidence already gathered.\n\n"
             "Report requirements: Chinese unless the query asks otherwise; compact; separate facts from uncertainty; "
             "mention conflicts between sources; include source names/URLs in the report."
         )
@@ -138,7 +155,7 @@ class WebResearchAgent:
             reasoning_effort="medium",
             verbosity="low",
             provider="openai",
-            max_tool_rounds=max(6, max_rounds * 3),
+            max_tool_rounds=max_search_calls + max_pages + 2,
         )
         LOG.info("web_research agent_return run=%s searched=%s fetched=%s answer_chars=%s", run_id, len(searched), len(fetched), len(answer or ""))
         return self._format_agent_report(answer, searched, fetched)
