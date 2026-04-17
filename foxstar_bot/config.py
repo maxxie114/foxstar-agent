@@ -31,6 +31,8 @@ class ToolConfig:
 class ModelConfig:
     name: str = "gpt-4.1-mini"
 
+    provider: str = "auto"
+
     reply_gate_model: str = "gpt-5-nano"
 
     vision_model: str = "gpt-4.1-mini"
@@ -69,6 +71,7 @@ class AppConfig:
     gemini_api_key: str = ""
     tavily_api_key: str = ""
     exa_api_key: str = ""
+    openrouter_api_key: str = ""
     log_level: str = "INFO"
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)

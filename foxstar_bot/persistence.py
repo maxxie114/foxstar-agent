@@ -117,6 +117,14 @@ class Database:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_events_chat_time ON chat_events(chat_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS group_aliases (
+                    chat_id TEXT PRIMARY KEY,
+                    alias TEXT,
+                    last_sender TEXT,
+                    last_message TEXT,
+                    last_seen_at TEXT NOT NULL
+                );
                 """
             )
             for statement in (

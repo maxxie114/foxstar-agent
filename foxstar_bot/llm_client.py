@@ -31,7 +31,13 @@ RESPONSES_TIMEOUT = 18.0
 LOG = logging.getLogger(__name__)
 
 class LLMClient:
-    def __init__(self, api_key: str, model_config: ModelConfig, gemini_api_key: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model_config: ModelConfig,
+        gemini_api_key: str = "",
+        openrouter_api_key: str = "",
+    ) -> None:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY 未配置")
         try:
@@ -41,6 +47,20 @@ class LLMClient:
             raise RuntimeError("需要安装 openai Python SDK") from exc
         timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=20.0, write=10.0, pool=5.0)
         self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
+        self.openrouter_client = (
+            OpenAI(
+                api_key=openrouter_api_key,
+                base_url="https://openrouter.ai/api/v1",
+                timeout=timeout,
+                max_retries=0,
+                default_headers={
+
+                    "X-Title": "FoxStar WeChat Bot",
+                },
+            )
+            if openrouter_api_key
+            else None
+        )
         self.config = model_config
         self.gemini_api_key = gemini_api_key
 
@@ -56,8 +76,18 @@ class LLMClient:
         timeout: float | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        provider: str | None = None,
     ) -> str:
         model_name = model or self.config.name
+        resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
+        if resolved_provider == "openrouter":
+            return self._openrouter_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                timeout=timeout,
+            )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model_name,
@@ -106,8 +136,19 @@ class LLMClient:
         timeout: float | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        provider: str | None = None,
     ) -> str:
         model_name = model or self.config.name
+        resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
+        if resolved_provider == "openrouter":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="openrouter",
+            )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
         input_items = [
@@ -140,6 +181,44 @@ class LLMClient:
             LOG.warning(
                 "responses returned empty text model=%s usage=%s",
                 kwargs["model"],
+                getattr(response, "usage", None),
+            )
+        return content
+
+    def _openrouter_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        if self.openrouter_client is None:
+            raise RuntimeError("OPENROUTER_API_KEY is not configured")
+        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "timeout": api_timeout,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = _call_with_hard_timeout(
+            "openrouter.chat.completions",
+            api_timeout + 2.0,
+            self.openrouter_client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "openrouter chat returned empty content model=%s finish_reason=%s usage=%s",
+                model_name,
+                getattr(choice, "finish_reason", None),
                 getattr(response, "usage", None),
             )
         return content
@@ -263,6 +342,27 @@ def _default_prompt_cache_retention(model: str) -> str:
     ):
         return "24h"
     return ""
+
+def _resolve_provider(provider: str | None, model: str) -> str:
+    value = (provider or "auto").strip().lower()
+    if value in {"openai", "openrouter"}:
+        return value
+    model_name = (model or "").strip().lower()
+    if "/" in model_name:
+        return "openrouter"
+    if model_name.startswith(("gpt-", "o1", "o3", "o4")):
+        return "openai"
+    return "openrouter"
+
+def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.get("name", ""),
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+        },
+    }
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
