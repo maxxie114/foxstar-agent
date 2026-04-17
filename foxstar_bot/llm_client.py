@@ -256,7 +256,20 @@ class LLMClient:
                 "Prioritize the original/named source, newest information, and at most 8 high-quality sources. "
                 "Do not write a long background article."
             )
-            response = _openai_call_with_retry("responses.web_search.retry", timeout + 25.0, self.client.responses.create, **retry_kwargs)
+            try:
+                response = _openai_call_with_retry(
+                    "responses.web_search.retry",
+                    timeout + 25.0,
+                    self.client.responses.create,
+                    **retry_kwargs,
+                )
+            except Exception as retry_exc:
+                LOG.warning(
+                    "openai_web_search retry failed; keeping first response model=%s response_id=%s reason=%s",
+                    model,
+                    getattr(response, "id", ""),
+                    retry_exc,
+                )
         output_items = list(getattr(response, "output", None) or [])
         LOG.info(
             "openai_web_search response model=%s response_id=%s status=%s incomplete=%s output_items=%s chars=%s",
