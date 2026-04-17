@@ -20,7 +20,7 @@ from .tool_url import FetchedPage, UrlFetchTool
 
 LOG = logging.getLogger(__name__)
 
-AGENTIC_RESEARCH_TIMEOUT_SECONDS = 45.0
+AGENTIC_RESEARCH_TIMEOUT_SECONDS = 40.0
 
 @dataclass(frozen=True)
 class ResearchPage:
@@ -39,7 +39,7 @@ class WebResearchAgent:
         searched: list[str] = []
         fetched: list[ResearchPage] = []
         started_at = time.monotonic()
-        max_search_calls = max(1, min(max_rounds * 2, 4))
+        max_search_calls = max(1, min(max_rounds * 2, 3))
         max_pages = max(1, min(max_pages, 5))
 
         def budget_error() -> str | None:
@@ -155,7 +155,7 @@ class WebResearchAgent:
             reasoning_effort="medium",
             verbosity="low",
             provider="openai",
-            max_tool_rounds=max_search_calls + max_pages + 2,
+            max_tool_rounds=max_search_calls + max_pages + 1,
         )
         LOG.info("web_research agent_return run=%s searched=%s fetched=%s answer_chars=%s", run_id, len(searched), len(fetched), len(answer or ""))
         return self._format_agent_report(answer, searched, fetched)
