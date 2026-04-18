@@ -6,8 +6,7 @@ from .privacy import public_participant_label, redact_private_ids
 
 class ContextStore:
     def add_message(self, chat_id: str, user_id: str, role: str, content: str, kind: str = "text") -> None:
-        user_id = public_participant_label(user_id)
-        content = self._trim(redact_private_ids(content))
+        content = self._trim(content)
         if not content:
             return
         with self.db.connect() as conn:
