@@ -10,6 +10,8 @@ import logging
 
 import mimetypes
 
+import re
+
 import time
 
 from datetime import datetime, timedelta, timezone
@@ -609,7 +611,19 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                return (message.content or "").strip()
+                content = (message.content or "").strip()
+                pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
+                if pseudo_result is not None:
+                    LOG.warning(
+                        "llm_plaintext_tool_call api=openrouter model=%s round=%s result=%s",
+                        model_name,
+                        round_index + 1,
+                        _compact_json(pseudo_result),
+                    )
+                    if isinstance(pseudo_result, dict) and pseudo_result.get("__terminal_response__"):
+                        return str(pseudo_result.get("text", "")).strip()
+                    return ""
+                return content
             chat_messages.append(
                 {
                     "role": "assistant",
@@ -860,6 +874,74 @@ def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
             "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
         },
     }
+
+def _handle_plaintext_tool_call(content: str, tool_handlers: dict[str, Any]) -> dict[str, Any] | None:
+    text = (content or "").strip()
+    if not text:
+        return None
+    parsed = _parse_plaintext_tool_call(text)
+    if parsed is None:
+        return None
+    name, args = parsed
+    handler = tool_handlers.get(name)
+    if handler is None:
+        return {"ok": False, "error": f"unknown plaintext tool: {name}"}
+    try:
+        return handler(**args)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+def _parse_plaintext_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
+    value = text.strip()
+    fence = re.fullmatch(r"```(?:json|tool_code|python)?\s*([\s\S]*?)\s*```", value, re.IGNORECASE)
+    if fence:
+        value = fence.group(1).strip()
+    for payload in _candidate_json_payloads(value):
+        parsed = _parse_tool_call_json(payload)
+        if parsed is not None:
+            return parsed
+    match = re.fullmatch(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*)\)\s*;?", value)
+    if not match:
+        return None
+    name = match.group(1)
+    raw_args = match.group(2).strip()
+    if name not in {"reject_response", "update_memory", "web_research", "fetch_url", "analyze_recent_image", "run_python_code"}:
+        return None
+    if raw_args.startswith("{") and raw_args.endswith("}"):
+        try:
+            args = json.loads(raw_args)
+        except Exception:
+            args = {}
+    elif name == "reject_response":
+        args = {"reason": raw_args.strip(" \t\r\n'\"")}
+    else:
+        args = {}
+    return name, args if isinstance(args, dict) else {}
+
+def _candidate_json_payloads(text: str) -> list[str]:
+    payloads = [text]
+    match = re.search(r"(\{[\s\S]*\})", text)
+    if match and match.group(1) != text:
+        payloads.append(match.group(1))
+    return payloads
+
+def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
+    try:
+        data = json.loads(payload)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    name = str(data.get("name") or data.get("tool") or data.get("function") or "").strip()
+    args = data.get("arguments") or data.get("args") or {}
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            args = {}
+    if name not in {"reject_response", "update_memory", "web_research", "fetch_url", "analyze_recent_image", "run_python_code"}:
+        return None
+    return name, args if isinstance(args, dict) else {}
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()

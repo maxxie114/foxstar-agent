@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 import re
 
 import requests
@@ -25,6 +26,10 @@ class UrlFetchTool:
         )
         response.raise_for_status()
         content_type = response.headers.get("content-type", "")
+        if "pdf" in content_type.lower() or url.lower().split("?", 1)[0].endswith(".pdf"):
+            text = _pdf_bytes_to_text(response.content)[:limit]
+            title = _url_filename(url)
+            return FetchedPage(url=url, title=title, text=text)
         if "text" not in content_type and "html" not in content_type and "json" not in content_type:
             raise RuntimeError(f"unsupported content type: {content_type or 'unknown'}")
         raw = response.text[:200000]
@@ -52,6 +57,25 @@ def _extract_title(raw: str) -> str:
     if not match:
         return ""
     return _clean_text(match.group(1))[:200]
+
+
+def _pdf_bytes_to_text(data: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except Exception as exc:
+        raise RuntimeError("PDF extraction requires pypdf") from exc
+    reader = PdfReader(BytesIO(data))
+    pages = [(page.extract_text() or "") for page in reader.pages]
+    text = "\n\n".join(pages).strip()
+    if not text:
+        return "PDF fetched, but no extractable text was found."
+    return text
+
+
+def _url_filename(url: str) -> str:
+    value = url.split("?", 1)[0].rstrip("/")
+    name = value.rsplit("/", 1)[-1]
+    return name[:200]
 
 
 def _html_to_text(raw: str) -> str:

@@ -32,6 +32,38 @@ def redact_private_ids(text: str) -> str:
     return value
 
 
+def redact_known_private_ids(text: str, known_ids: list[str] | set[str] | tuple[str, ...]) -> str:
+    value = _remove_private_ids(text)
+    for raw in sorted({str(item or "").strip() for item in known_ids}, key=len, reverse=True):
+        if not raw:
+            continue
+        value = re.sub(rf"\s*[\(（]\s*{re.escape(raw)}\s*[\)）]", "", value, flags=re.IGNORECASE)
+        value = re.sub(re.escape(raw), "", value, flags=re.IGNORECASE)
+    return _cleanup_redacted_text(value)
+
+
+def _remove_private_ids(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    value = MENTION_ID_RE.sub(lambda match: f"@{match.group('name')}", value)
+    value = NAME_ID_RE.sub(lambda match: match.group("name"), value)
+    value = LABELED_ID_RE.sub("", value)
+    value = WXID_RE.sub("", value)
+    value = CHATROOM_RE.sub("", value)
+    return _cleanup_redacted_text(value)
+
+
+def _cleanup_redacted_text(text: str) -> str:
+    value = str(text or "")
+    value = re.sub(r"[ \t]{2,}", " ", value)
+    value = re.sub(r"\s+([，。！？；：,.!?;:])", r"\1", value)
+    value = re.sub(r"@\s+", "@", value)
+    value = re.sub(r"[（(]\s*[）)]", "", value)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
 def public_display_name(display: str, raw_id: str) -> str:
     name = redact_private_ids(str(display or "").strip())
     raw = str(raw_id or "").strip()

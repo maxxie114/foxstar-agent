@@ -5,16 +5,6 @@ from .persistence import Database, utc_now
 from .privacy import public_participant_label, redact_private_ids
 
 class ContextStore:
-    def add_message(self, chat_id: str, user_id: str, role: str, content: str, kind: str = "text") -> None:
-        content = self._trim(content)
-        if not content:
-            return
-        with self.db.connect() as conn:
-            conn.execute(
-                "INSERT INTO messages(chat_id, user_id, role, content, kind, created_at) VALUES(?, ?, ?, ?, ?, ?)",
-                (chat_id, user_id, role, content, kind, utc_now()),
-            )
-
     def recent_messages(self, chat_id: str) -> list[dict[str, str]]:
         with self.db.connect() as conn:
             rows = conn.execute(
@@ -50,3 +40,6 @@ def _is_low_signal_content(content: str) -> bool:
     if len(value) <= 8 and "[" in value and "]" in value:
         return True
     return False
+
+def _normalized_for_dedupe(content: str) -> str:
+    return " ".join((content or "").split())

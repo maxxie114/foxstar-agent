@@ -32,6 +32,51 @@ def _parse_reply_decision(decision: str) -> bool:
         return False
     return first[0].strip(" .,:;!?\n\t").upper() == "REPLY"
 
+def _parse_reply_gate_decision(output: str) -> dict[str, object]:
+    text = (output or "").strip()
+    data: dict[str, object] | None = None
+    if text:
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                try:
+                    loaded = json.loads(match.group(0))
+                    if isinstance(loaded, dict):
+                        data = loaded
+                except json.JSONDecodeError:
+                    data = None
+    if data is None:
+        decision = "REPLY" if _parse_reply_decision(text) else "PASS"
+        return {
+            "decision": decision,
+            "confidence": 0.0,
+            "reason": "fallback parser used; model did not return valid JSON",
+            "relevant_signals": [],
+            "risk": "invalid_json",
+        }
+    decision = str(data.get("decision") or "").strip().upper()
+    if decision not in {"REPLY", "PASS"}:
+        decision = "REPLY" if _parse_reply_decision(text) else "PASS"
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(confidence, 1.0))
+    signals = data.get("relevant_signals", [])
+    if not isinstance(signals, list):
+        signals = [str(signals)]
+    return {
+        "decision": decision,
+        "confidence": confidence,
+        "reason": str(data.get("reason") or "")[:500],
+        "relevant_signals": [str(item)[:200] for item in signals[:8]],
+        "risk": str(data.get("risk") or "")[:300],
+    }
+
 def _is_timeout_error(exc: Exception) -> bool:
     current: BaseException | None = exc
     while current is not None:
