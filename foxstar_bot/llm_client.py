@@ -922,7 +922,7 @@ def _resolve_provider(provider: str | None, model: str) -> str:
         return "openai"
     return "openrouter"
 
-def _normalize_reasoning_effort(value: str | None) -> str:
+def _normalize_reasoning_effort(value: str | None, *, preserve_max: bool = False) -> str:
     effort = (value or "").strip().lower()
     if not effort or effort in {"none", "off", "false", "0", "clear", "default"}:
         return ""
@@ -933,13 +933,13 @@ def _normalize_reasoning_effort(value: str | None) -> str:
         "medium": "medium",
         "med": "medium",
         "high": "high",
-        "xhigh": "high",
-        "max": "high",
+        "xhigh": "max" if preserve_max else "high",
+        "max": "max" if preserve_max else "high",
     }
     return aliases.get(effort, effort)
 
 def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str, Any]:
-    normalized = _normalize_reasoning_effort(effort)
+    normalized = _normalize_reasoning_effort(effort, preserve_max=True)
     if not normalized:
         return {}
     model_name = (model or "").strip().lower()
@@ -964,6 +964,8 @@ def _reasoning_budget_for_effort(effort: str) -> int:
         return 1024
     if effort == "medium":
         return 4096
+    if effort == "max":
+        return 12288
     return 8192
 
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
