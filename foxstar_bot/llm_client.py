@@ -94,6 +94,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 timeout=timeout,
             )
         api_timeout = float(timeout or OPENROUTER_TIMEOUT)
@@ -105,8 +106,9 @@ class LLMClient:
         }
         if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
-        if reasoning_effort is not None:
-            kwargs["reasoning_effort"] = reasoning_effort
+        openai_effort = _normalize_reasoning_effort(reasoning_effort)
+        if openai_effort:
+            kwargs["reasoning_effort"] = openai_effort
         if verbosity is not None:
             kwargs["verbosity"] = verbosity
         if prompt_cache_key:
@@ -154,6 +156,7 @@ class LLMClient:
                 max_completion_tokens=max_output_tokens,
                 model=model_name,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="openrouter",
             )
@@ -173,8 +176,9 @@ class LLMClient:
         }
         if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
-        if reasoning_effort is not None:
-            kwargs["reasoning"] = {"effort": reasoning_effort}
+        openai_effort = _normalize_reasoning_effort(reasoning_effort)
+        if openai_effort:
+            kwargs["reasoning"] = {"effort": openai_effort}
         if verbosity is not None:
             kwargs["text"] = {"verbosity": verbosity}
         if prompt_cache_key:
@@ -326,6 +330,7 @@ class LLMClient:
                 tool_handlers,
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
             )
         if not tools:
@@ -334,6 +339,7 @@ class LLMClient:
                 max_completion_tokens=max_output_tokens,
                 model=model_name,
                 temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+                reasoning_effort=reasoning_effort,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 provider=resolved_provider,
@@ -362,8 +368,8 @@ class LLMClient:
                 }
                 if _model_supports_temperature(model_name):
                     kwargs["temperature"] = self.config.temperature
-                effort = (reasoning_effort or self.config.reasoning_effort or "").strip().lower()
-                if effort and effort not in {"none", "off", "false", "0"}:
+                effort = _normalize_reasoning_effort(reasoning_effort or self.config.reasoning_effort)
+                if effort:
                     kwargs["reasoning"] = {"effort": effort}
                 text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
                 if text_verbosity:
@@ -471,6 +477,7 @@ class LLMClient:
                 messages,
                 model=model_name,
                 temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+                reasoning_effort=reasoning_effort,
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 provider=resolved_provider,
@@ -505,8 +512,8 @@ class LLMClient:
             "max_output_tokens": max_output_tokens,
             "timeout": RESPONSES_TIMEOUT,
         }
-        effort = (reasoning_effort or self.config.reasoning_effort or "").strip().lower()
-        if effort and effort not in {"none", "off", "false", "0"}:
+        effort = _normalize_reasoning_effort(reasoning_effort or self.config.reasoning_effort)
+        if effort:
             kwargs["reasoning"] = {"effort": effort}
         text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
         if text_verbosity:
@@ -528,6 +535,7 @@ class LLMClient:
         *,
         max_tokens: int,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
         timeout: float | None = None,
     ) -> str:
         if self.openrouter_client is None:
@@ -541,11 +549,20 @@ class LLMClient:
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
-        response = _call_with_hard_timeout(
+        extra_body = _openrouter_reasoning_extra_body(model_name, reasoning_effort or self.config.reasoning_effort)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+            LOG.info(
+                "reasoning_adapter api=openrouter model=%s requested=%s payload=%s",
+                model_name,
+                reasoning_effort or self.config.reasoning_effort,
+                _compact_json(extra_body),
+            )
+        response = _call_openrouter_chat_completion(
             "openrouter.chat.completions",
             api_timeout + 2.0,
             self.openrouter_client.chat.completions.create,
-            **kwargs,
+            kwargs,
         )
         _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
         choice = response.choices[0]
@@ -567,6 +584,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
+        reasoning_effort: str | None = None,
         max_tool_rounds: int = 4,
     ) -> str:
         if self.openrouter_client is None:
@@ -586,6 +604,15 @@ class LLMClient:
             }
             if _model_supports_temperature(model_name):
                 kwargs["temperature"] = self.config.temperature
+            extra_body = _openrouter_reasoning_extra_body(model_name, reasoning_effort or self.config.reasoning_effort)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+                LOG.info(
+                    "reasoning_adapter api=openrouter model=%s requested=%s payload=%s",
+                    model_name,
+                    reasoning_effort or self.config.reasoning_effort,
+                    _compact_json(extra_body),
+                )
             LOG.info(
                 "llm_tool_request api=openrouter model=%s round=%s/%s messages=%s tools=%s max_tokens=%s",
                 model_name,
@@ -595,11 +622,11 @@ class LLMClient:
                 [tool.get("function", {}).get("name", "") for tool in chat_tools],
                 max_tokens,
             )
-            response = _call_with_hard_timeout(
+            response = _call_openrouter_chat_completion(
                 "openrouter.chat.completions",
                 OPENROUTER_TIMEOUT + 5.0,
                 self.openrouter_client.chat.completions.create,
-                **kwargs,
+                kwargs,
             )
             LOG.info(
                 "llm_tool_response api=openrouter model=%s round=%s finish_reason=%s",
@@ -686,7 +713,12 @@ class LLMClient:
                 ),
             }
         )
-        return self._openrouter_chat(chat_messages, model_name, max_tokens=max_tokens)
+        return self._openrouter_chat(
+            chat_messages,
+            model_name,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
@@ -787,12 +819,37 @@ def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs
             raise
     raise RuntimeError("unreachable OpenAI retry state")
 
+def _call_openrouter_chat_completion(label: str, hard_timeout: float, func: Any, kwargs: dict[str, Any]) -> Any:
+    try:
+        return _call_with_hard_timeout(label, hard_timeout, func, **kwargs)
+    except Exception as exc:
+        if kwargs.get("extra_body") and _is_unsupported_reasoning_error(exc):
+            retry_kwargs = dict(kwargs)
+            removed = retry_kwargs.pop("extra_body", None)
+            LOG.warning(
+                "openrouter reasoning payload rejected; retrying without reasoning model=%s payload=%s reason=%s",
+                kwargs.get("model", ""),
+                _compact_json(removed),
+                exc,
+            )
+            return _call_with_hard_timeout(label, hard_timeout, func, **retry_kwargs)
+        raise
+
 def _is_retryable_openai_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and (status_code == 408 or status_code == 409 or status_code == 429 or status_code >= 500):
         return True
     name = exc.__class__.__name__.lower()
     return "timeout" in name or "apierror" in name or "server" in name
+
+def _is_unsupported_reasoning_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int) and status_code not in {400, 422}:
+        return False
+    text = str(exc).lower()
+    if "reasoning" in text or "thinking" in text:
+        return any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid", "not support", "does not support"))
+    return "extra_body" in text and any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid"))
 
 def _response_incomplete_reason(response: Any) -> str:
     if getattr(response, "status", "") != "incomplete":
@@ -864,6 +921,50 @@ def _resolve_provider(provider: str | None, model: str) -> str:
     if model_name.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     return "openrouter"
+
+def _normalize_reasoning_effort(value: str | None) -> str:
+    effort = (value or "").strip().lower()
+    if not effort or effort in {"none", "off", "false", "0", "clear", "default"}:
+        return ""
+    aliases = {
+        "minimal": "minimal",
+        "min": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "med": "medium",
+        "high": "high",
+        "xhigh": "high",
+        "max": "high",
+    }
+    return aliases.get(effort, effort)
+
+def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str, Any]:
+    normalized = _normalize_reasoning_effort(effort)
+    if not normalized:
+        return {}
+    model_name = (model or "").strip().lower()
+    if normalized == "minimal":
+        normalized = "low"
+    payload: dict[str, Any] = {"effort": normalized, "exclude": True}
+    if _openrouter_prefers_reasoning_budget(model_name):
+        payload = {"max_tokens": _reasoning_budget_for_effort(normalized), "exclude": True}
+    return {"reasoning": payload}
+
+def _openrouter_prefers_reasoning_budget(model: str) -> bool:
+
+
+    if not model.startswith("anthropic/"):
+        return False
+    if "4.7" in model or "4-7" in model or "4.6" in model or "4-6" in model:
+        return False
+    return "claude-3.7" in model or "claude-3-7" in model or "claude-sonnet-4.5" in model or "claude-4.5" in model
+
+def _reasoning_budget_for_effort(effort: str) -> int:
+    if effort == "low":
+        return 1024
+    if effort == "medium":
+        return 4096
+    return 8192
 
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
