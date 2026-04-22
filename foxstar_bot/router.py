@@ -77,6 +77,43 @@ def _parse_reply_gate_decision(output: str) -> dict[str, object]:
         "risk": str(data.get("risk") or "")[:300],
     }
 
+def _looks_like_tool_leak(text: str) -> bool:
+    value = (text or "").strip()
+    if not value:
+        return False
+    compact = " ".join(value.split())
+    tool_names = (
+        "reject_response",
+        TERMINAL_REJECT_TOOL_NAME,
+        "update_memory",
+        "web_research",
+        "fetch_url",
+        "analyze_recent_image",
+        "run_python_code",
+    )
+    if any(
+        re.fullmatch(rf"(?:```(?:json|tool_code|python)?\s*)?{re.escape(name)}\s*\([\s\S]*\)\s*(?:```)?", value, re.IGNORECASE)
+        for name in tool_names
+    ):
+        return True
+    if re.fullmatch(r"(?:```(?:json)?\s*)?\{[\s\S]*\}\s*(?:```)?", value, re.IGNORECASE):
+        lowered = compact.lower()
+        if any(
+            token in lowered
+            for token in (
+                '"name":"reject_response"',
+                f'"name":"{TERMINAL_REJECT_TOOL_NAME.lower()}"',
+                '"tool":"reject_response"',
+                f'"tool":"{TERMINAL_REJECT_TOOL_NAME.lower()}"',
+                '"function":"reject_response"',
+                f'"function":"{TERMINAL_REJECT_TOOL_NAME.lower()}"',
+                '"name":"update_memory"',
+                '"tool":"update_memory"',
+            )
+        ):
+            return True
+    return False
+
 def _is_timeout_error(exc: Exception) -> bool:
     current: BaseException | None = exc
     while current is not None:

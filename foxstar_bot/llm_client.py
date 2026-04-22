@@ -38,6 +38,20 @@ OPENROUTER_TIMEOUT = 55.0
 
 LOG = logging.getLogger(__name__)
 
+TERMINAL_REJECT_TOOL_NAME = "_drop_reply_internal"
+
+TOOL_NAME_ALIASES = {
+    "reject_response": TERMINAL_REJECT_TOOL_NAME,
+    TERMINAL_REJECT_TOOL_NAME: TERMINAL_REJECT_TOOL_NAME,
+    "update_memory": "update_memory",
+    "web_research": "web_research",
+    "fetch_url": "fetch_url",
+    "analyze_recent_image": "analyze_recent_image",
+    "run_python_code": "run_python_code",
+}
+
+INTERPRETABLE_PLAINTEXT_TOOLS = {TERMINAL_REJECT_TOOL_NAME}
+
 class LLMClient:
     def __init__(
         self,
@@ -45,6 +59,8 @@ class LLMClient:
         model_config: ModelConfig,
         gemini_api_key: str = "",
         openrouter_api_key: str = "",
+        sambanova_api_key: str = "",
+        fireworks_api_key: str = "",
     ) -> None:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY 未配置")
@@ -69,6 +85,26 @@ class LLMClient:
             if openrouter_api_key
             else None
         )
+        self.sambanova_client = (
+            OpenAI(
+                api_key=sambanova_api_key,
+                base_url="https://api.sambanova.ai/v1",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if sambanova_api_key
+            else None
+        )
+        self.fireworks_client = (
+            OpenAI(
+                api_key=fireworks_api_key,
+                base_url="https://api.fireworks.ai/inference/v1",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if fireworks_api_key
+            else None
+        )
         self.config = model_config
         self.gemini_api_key = gemini_api_key
 
@@ -86,7 +122,7 @@ class LLMClient:
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
     ) -> str:
-        model_name = model or self.config.name
+        model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
         if resolved_provider == "openrouter":
             return self._openrouter_chat(
@@ -95,6 +131,14 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
+                timeout=timeout,
+            )
+        if resolved_provider == "fireworks":
+            return self._fireworks_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
                 timeout=timeout,
             )
         api_timeout = float(timeout or OPENROUTER_TIMEOUT)
@@ -148,7 +192,7 @@ class LLMClient:
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
     ) -> str:
-        model_name = model or self.config.name
+        model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
         if resolved_provider == "openrouter":
             return self.chat(
@@ -159,6 +203,15 @@ class LLMClient:
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="openrouter",
+            )
+        if resolved_provider == "fireworks":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="fireworks",
             )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
@@ -321,7 +374,7 @@ class LLMClient:
         provider: str | None = None,
         max_tool_rounds: int = 4,
     ) -> str:
-        model_name = model or self.config.name
+        model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
         if resolved_provider == "openrouter":
             return self._openrouter_chat_with_tools(
@@ -331,6 +384,15 @@ class LLMClient:
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 reasoning_effort=reasoning_effort,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if resolved_provider == "fireworks":
+            return self._fireworks_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
             )
         if not tools:
@@ -472,7 +534,8 @@ class LLMClient:
                     LOG.warning("responses forced final failed after tool error: %s", final_exc)
                     rendered = _render_tool_outputs(input_items)
                     if rendered:
-                        return rendered
+                        LOG.warning("responses tool outputs suppressed from chat fallback: %s", rendered)
+                        return ""
             return self.chat(
                 messages,
                 model=model_name,
@@ -570,6 +633,45 @@ class LLMClient:
         if not content:
             LOG.warning(
                 "openrouter chat returned empty content model=%s finish_reason=%s usage=%s",
+                model_name,
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
+    def _fireworks_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        if self.fireworks_client is None:
+            raise RuntimeError("FIREWORKS_API_KEY is not configured")
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "timeout": api_timeout,
+            "extra_body": {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = _call_with_hard_timeout(
+            "fireworks.chat.completions",
+            api_timeout + 2.0,
+            self.fireworks_client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage("fireworks.chat.completions", model_name, getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "fireworks chat returned empty content model=%s finish_reason=%s usage=%s",
                 model_name,
                 getattr(choice, "finish_reason", None),
                 getattr(response, "usage", None),
@@ -719,6 +821,127 @@ class LLMClient:
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
         )
+
+    def _fireworks_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        if self.fireworks_client is None:
+            raise RuntimeError("FIREWORKS_API_KEY is not configured")
+        chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
+        chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": chat_messages,
+                "tools": chat_tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "max_tokens": max_tokens,
+                "timeout": OPENROUTER_TIMEOUT,
+                "extra_body": {"thinking": {"type": "enabled", "budget_tokens": 2048}},
+            }
+            if _model_supports_temperature(model_name):
+                kwargs["temperature"] = self.config.temperature
+            LOG.info(
+                "llm_tool_request api=fireworks model=%s round=%s/%s messages=%s tools=%s max_tokens=%s",
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(chat_messages),
+                [tool.get("function", {}).get("name", "") for tool in chat_tools],
+                max_tokens,
+            )
+            response = _call_with_hard_timeout(
+                "fireworks.chat.completions",
+                OPENROUTER_TIMEOUT + 5.0,
+                self.fireworks_client.chat.completions.create,
+                **kwargs,
+            )
+            LOG.info(
+                "llm_tool_response api=fireworks model=%s round=%s finish_reason=%s",
+                model_name,
+                round_index + 1,
+                getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
+            )
+            _log_prompt_cache_usage("fireworks.chat.completions", model_name, getattr(response, "usage", None))
+            message = response.choices[0].message
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            if not tool_calls:
+                content = (message.content or "").strip()
+                pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
+                if pseudo_result is not None:
+                    LOG.warning(
+                        "llm_plaintext_tool_call api=fireworks model=%s round=%s result=%s",
+                        model_name,
+                        round_index + 1,
+                        _compact_json(pseudo_result),
+                    )
+                    if isinstance(pseudo_result, dict) and pseudo_result.get("__terminal_response__"):
+                        return str(pseudo_result.get("text", "")).strip()
+                    return ""
+                return content
+            chat_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments or "{}",
+                            },
+                        }
+                        for call in tool_calls
+                    ],
+                }
+            )
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=fireworks model=%s round=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(call.function.arguments),
+                )
+                handler = tool_handlers.get(call.function.name)
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
+                else:
+                    try:
+                        args = json.loads(call.function.arguments or "{}")
+                        result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                LOG.info(
+                    "llm_tool_result api=fireworks model=%s round=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(result),
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                chat_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        LOG.warning("llm_tool_budget_exhausted api=fireworks model=%s rounds=%s", model_name, tool_rounds)
+        return self._fireworks_chat(chat_messages, model_name, max_tokens=max_tokens)
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
@@ -894,6 +1117,21 @@ def _compact_json(value: Any, limit: int = 900) -> str:
         return text[:limit].rstrip() + "..."
     return text
 
+def _render_tool_outputs(input_items: list[Any], limit: int = 3500) -> str:
+    outputs: list[str] = []
+    for item in input_items:
+        if isinstance(item, dict) and item.get("type") == "function_call_output":
+            output = str(item.get("output") or "").strip()
+            if output:
+                outputs.append(output)
+    if not outputs:
+        return ""
+    text = "\n".join(outputs)
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit].rstrip() + "..."
+    return text
+
 def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
     citations: list[dict[str, str]] = []
     for item in output_items:
@@ -913,9 +1151,11 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter"}:
+    if value in {"openai", "openrouter", "fireworks"}:
         return value
     model_name = (model or "").strip().lower()
+    if model_name.startswith("accounts/fireworks/"):
+        return "fireworks"
     if "/" in model_name:
         return "openrouter"
     if model_name.startswith(("gpt-", "o1", "o3", "o4")):
@@ -949,6 +1189,27 @@ def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str
     if _openrouter_prefers_reasoning_budget(model_name):
         payload = {"max_tokens": _reasoning_budget_for_effort(normalized), "exclude": True}
     return {"reasoning": payload}
+
+def _reply_gate_json_schema() -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "reply_gate_decision",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string", "enum": ["REPLY", "PASS"]},
+                    "confidence": {"type": "number"},
+                    "reason": {"type": "string"},
+                    "relevant_signals": {"type": "array", "items": {"type": "string"}},
+                    "risk": {"type": "string"},
+                },
+                "required": ["decision", "confidence", "reason", "relevant_signals", "risk"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+    }
 
 def _openrouter_prefers_reasoning_budget(model: str) -> bool:
 
@@ -986,6 +1247,9 @@ def _handle_plaintext_tool_call(content: str, tool_handlers: dict[str, Any]) -> 
     if parsed is None:
         return None
     name, args = parsed
+    if name not in INTERPRETABLE_PLAINTEXT_TOOLS:
+        LOG.warning("plaintext pseudo-tool blocked name=%s content=%r", name, text[:300])
+        return {"ok": False, "__blocked_plaintext_tool__": True, "name": name}
     handler = tool_handlers.get(name)
     if handler is None:
         return {"ok": False, "error": f"unknown plaintext tool: {name}"}
@@ -1006,16 +1270,16 @@ def _parse_plaintext_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
     match = re.fullmatch(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([\s\S]*)\)\s*;?", value)
     if not match:
         return None
-    name = match.group(1)
+    name = _canonical_tool_name(match.group(1))
     raw_args = match.group(2).strip()
-    if name not in {"reject_response", "update_memory", "web_research", "fetch_url", "analyze_recent_image", "run_python_code"}:
+    if not name:
         return None
     if raw_args.startswith("{") and raw_args.endswith("}"):
         try:
             args = json.loads(raw_args)
         except Exception:
             args = {}
-    elif name == "reject_response":
+    elif name == TERMINAL_REJECT_TOOL_NAME:
         args = {"reason": raw_args.strip(" \t\r\n'\"")}
     else:
         args = {}
@@ -1035,16 +1299,26 @@ def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
         return None
     if not isinstance(data, dict):
         return None
-    name = str(data.get("name") or data.get("tool") or data.get("function") or "").strip()
+    name = _canonical_tool_name(str(data.get("name") or data.get("tool") or data.get("function") or "").strip())
     args = data.get("arguments") or data.get("args") or {}
     if isinstance(args, str):
         try:
             args = json.loads(args)
         except Exception:
             args = {}
-    if name not in {"reject_response", "update_memory", "web_research", "fetch_url", "analyze_recent_image", "run_python_code"}:
+    if not name:
         return None
     return name, args if isinstance(args, dict) else {}
+
+def _canonical_tool_name(name: str) -> str:
+    return TOOL_NAME_ALIASES.get((name or "").strip(), "")
+
+def _canonicalize_model_name(model: str) -> str:
+    value = (model or "").strip()
+    lowered = value.lower()
+    if lowered.startswith(("gpt-", "o1", "o3", "o4")):
+        return lowered
+    return value
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()

@@ -27,6 +27,8 @@ def normalize_wechat_content(content: str, msg_type: int) -> str:
     app_type = _find_text(root, ".//appmsg/type")
     if msg_type == 49 and app_type == "57":
         return _render_quote_message(root) or text
+    if msg_type == 49:
+        return _render_app_message(root, app_type) or text
 
     return text
 
@@ -39,6 +41,10 @@ def wechat_appmsg_type(content: str) -> str:
     if root is None:
         return ""
     return _find_text(root, ".//appmsg/type")
+
+
+def wechat_is_document_appmsg(content: str) -> bool:
+    return wechat_appmsg_type(content) in {"6", "74"}
 
 
 def wechat_image_length(content: str) -> int | None:
@@ -87,6 +93,28 @@ def _render_image_message(root: ElementTree.Element) -> str:
     if width and height and width != "0" and height != "0":
         return f"[图片 {width}x{height}]"
     return "[图片]"
+
+
+def _render_app_message(root: ElementTree.Element, app_type: str) -> str:
+    title = _clean_text(_find_text(root, ".//appmsg/title"))
+    desc = _clean_text(_find_text(root, ".//appmsg/des"))
+    if app_type in {"6", "74"}:
+        if title:
+            return f"[文件] {title}"
+        return "[文件]"
+    if app_type == "5":
+        if title and desc:
+            return f"[分享] {title} - {desc}"
+        if title:
+            return f"[分享] {title}"
+        return "[分享]"
+    if title and desc:
+        return f"[卡片] {title} - {desc}"
+    if title:
+        return f"[卡片] {title}"
+    if desc:
+        return f"[卡片] {desc}"
+    return "[卡片]"
 
 
 def _parse_xml(text: str) -> ElementTree.Element | None:

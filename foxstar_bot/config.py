@@ -74,6 +74,8 @@ class AppConfig:
     tavily_api_key: str = ""
     exa_api_key: str = ""
     openrouter_api_key: str = ""
+    sambanova_api_key: str = ""
+    fireworks_api_key: str = ""
     log_level: str = "INFO"
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
