@@ -50,6 +50,35 @@ class ModelConfig:
     max_output_tokens: int = 700
 
 @dataclass(frozen=True)
+class ModelRouterTierConfig:
+    provider: str = "openai"
+    model: str = "gpt-5.4"
+    reasoning_effort: str = "medium"
+    verbosity: str = "medium"
+
+@dataclass(frozen=True)
+class ModelRouterConfig:
+    enabled: bool = False
+
+    medium: ModelRouterTierConfig = field(
+        default_factory=lambda: ModelRouterTierConfig(
+            provider="openrouter",
+            model="z-ai/glm-5-turbo",
+            reasoning_effort="medium",
+            verbosity="medium",
+        )
+    )
+
+    high: ModelRouterTierConfig = field(
+        default_factory=lambda: ModelRouterTierConfig(
+            provider="openai",
+            model="gpt-5.4",
+            reasoning_effort="high",
+            verbosity="medium",
+        )
+    )
+
+@dataclass(frozen=True)
 class StorageConfig:
     sqlite_path: Path = Path("data/foxstar.sqlite3")
     files_dir: Path = Path("data/files")
@@ -80,5 +109,6 @@ class AppConfig:
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    model_router: ModelRouterConfig = field(default_factory=ModelRouterConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     reply_timing: ReplyTimingConfig = field(default_factory=ReplyTimingConfig)

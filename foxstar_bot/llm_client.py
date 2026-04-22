@@ -141,6 +141,14 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
             )
+        if resolved_provider == "sambanova":
+            return self._sambanova_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                timeout=timeout,
+            )
         api_timeout = float(timeout or OPENROUTER_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model_name,
@@ -212,6 +220,15 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="fireworks",
+            )
+        if resolved_provider == "sambanova":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="sambanova",
             )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
@@ -388,6 +405,15 @@ class LLMClient:
             )
         if resolved_provider == "fireworks":
             return self._fireworks_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if resolved_provider == "sambanova":
+            return self._sambanova_chat_with_tools(
                 messages,
                 tools,
                 tool_handlers,
@@ -678,6 +704,44 @@ class LLMClient:
             )
         return content
 
+    def _sambanova_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        if self.sambanova_client is None:
+            raise RuntimeError("SAMBA_NOVA_KEY is not configured")
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "timeout": api_timeout,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        response = _call_with_hard_timeout(
+            "sambanova.chat.completions",
+            api_timeout + 2.0,
+            self.sambanova_client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage("sambanova.chat.completions", model_name, getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "sambanova chat returned empty content model=%s finish_reason=%s usage=%s",
+                model_name,
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
     def _openrouter_chat_with_tools(
         self,
         messages: list[dict[str, Any]],
@@ -943,6 +1007,126 @@ class LLMClient:
         LOG.warning("llm_tool_budget_exhausted api=fireworks model=%s rounds=%s", model_name, tool_rounds)
         return self._fireworks_chat(chat_messages, model_name, max_tokens=max_tokens)
 
+    def _sambanova_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        if self.sambanova_client is None:
+            raise RuntimeError("SAMBA_NOVA_KEY is not configured")
+        chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
+        chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": chat_messages,
+                "tools": chat_tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "max_tokens": max_tokens,
+                "timeout": OPENROUTER_TIMEOUT,
+            }
+            if _model_supports_temperature(model_name):
+                kwargs["temperature"] = self.config.temperature
+            LOG.info(
+                "llm_tool_request api=sambanova model=%s round=%s/%s messages=%s tools=%s max_tokens=%s",
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(chat_messages),
+                [tool.get("function", {}).get("name", "") for tool in chat_tools],
+                max_tokens,
+            )
+            response = _call_with_hard_timeout(
+                "sambanova.chat.completions",
+                OPENROUTER_TIMEOUT + 5.0,
+                self.sambanova_client.chat.completions.create,
+                **kwargs,
+            )
+            LOG.info(
+                "llm_tool_response api=sambanova model=%s round=%s finish_reason=%s",
+                model_name,
+                round_index + 1,
+                getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
+            )
+            _log_prompt_cache_usage("sambanova.chat.completions", model_name, getattr(response, "usage", None))
+            message = response.choices[0].message
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            if not tool_calls:
+                content = (message.content or "").strip()
+                pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
+                if pseudo_result is not None:
+                    LOG.warning(
+                        "llm_plaintext_tool_call api=sambanova model=%s round=%s result=%s",
+                        model_name,
+                        round_index + 1,
+                        _compact_json(pseudo_result),
+                    )
+                    if isinstance(pseudo_result, dict) and pseudo_result.get("__terminal_response__"):
+                        return str(pseudo_result.get("text", "")).strip()
+                    return ""
+                return content
+            chat_messages.append(
+                {
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments or "{}",
+                            },
+                        }
+                        for call in tool_calls
+                    ],
+                }
+            )
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=sambanova model=%s round=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(call.function.arguments),
+                )
+                handler = tool_handlers.get(call.function.name)
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
+                else:
+                    try:
+                        args = json.loads(call.function.arguments or "{}")
+                        result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                LOG.info(
+                    "llm_tool_result api=sambanova model=%s round=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(result),
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                chat_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        LOG.warning("llm_tool_budget_exhausted api=sambanova model=%s rounds=%s", model_name, tool_rounds)
+        return self._sambanova_chat(chat_messages, model_name, max_tokens=max_tokens)
+
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
             try:
@@ -1151,7 +1335,7 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "fireworks"}:
+    if value in {"openai", "openrouter", "fireworks", "sambanova"}:
         return value
     model_name = (model or "").strip().lower()
     if model_name.startswith("accounts/fireworks/"):

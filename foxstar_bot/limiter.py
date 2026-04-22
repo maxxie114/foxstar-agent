@@ -19,16 +19,26 @@ class RateLimiter:
         self.db = db
         self.config = config
 
-    def check_and_record(self, user_id: str, chat_id: str, is_group: bool, bypass: bool = False) -> LimitResult:
+    def check_and_record(
+        self,
+        user_id: str,
+        chat_id: str,
+        is_group: bool,
+        bypass: bool = False,
+        user_daily_limit_override: int | None = None,
+        group_daily_limit_override: int | None = None,
+    ) -> LimitResult:
         if bypass:
             return LimitResult(True)
         today = date.today().isoformat()
         now = time.time()
+        user_daily_limit = self.config.user_daily_limit if user_daily_limit_override is None else max(0, int(user_daily_limit_override))
+        group_daily_limit = self.config.group_daily_limit if group_daily_limit_override is None else max(0, int(group_daily_limit_override))
         checks = [
-            (f"user:{chat_id}:{user_id}", self.config.user_cooldown_seconds, self.config.user_daily_limit),
+            (f"user:{chat_id}:{user_id}", self.config.user_cooldown_seconds, user_daily_limit),
         ]
         if is_group:
-            checks.append((f"group:{chat_id}", self.config.group_cooldown_seconds, self.config.group_daily_limit))
+            checks.append((f"group:{chat_id}", self.config.group_cooldown_seconds, group_daily_limit))
 
         with self.db.connect() as conn:
             for key, cooldown, daily_limit in checks:
