@@ -112,6 +112,9 @@ def _looks_like_tool_leak(text: str) -> bool:
         "fetch_url",
         "analyze_recent_image",
         "run_python_code",
+        "search_knowledge_base",
+        "discover_skills",
+        "load_skill",
     )
     if any(
         re.fullmatch(rf"(?:```(?:json|tool_code|python)?\s*)?{re.escape(name)}\s*\([\s\S]*\)\s*(?:```)?", value, re.IGNORECASE)
