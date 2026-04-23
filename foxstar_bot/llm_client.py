@@ -59,6 +59,7 @@ class LLMClient:
         model_config: ModelConfig,
         gemini_api_key: str = "",
         openrouter_api_key: str = "",
+        deepseek_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
     ) -> None:
@@ -83,6 +84,16 @@ class LLMClient:
                 },
             )
             if openrouter_api_key
+            else None
+        )
+        self.deepseek_client = (
+            OpenAI(
+                api_key=deepseek_api_key,
+                base_url="https://api.deepseek.com",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if deepseek_api_key
             else None
         )
         self.sambanova_client = (
@@ -126,6 +137,15 @@ class LLMClient:
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
         if resolved_provider == "openrouter":
             return self._openrouter_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                timeout=timeout,
+            )
+        if resolved_provider == "deepseek":
+            return self._deepseek_chat(
                 messages,
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
@@ -211,6 +231,16 @@ class LLMClient:
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="openrouter",
+            )
+        if resolved_provider == "deepseek":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                timeout=timeout,
+                provider="deepseek",
             )
         if resolved_provider == "fireworks":
             return self.chat(
@@ -400,6 +430,17 @@ class LLMClient:
                 tool_handlers,
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if resolved_provider == "deepseek":
+            return self._deepseek_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                temperature=self.config.temperature,
                 reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
             )
@@ -665,6 +706,52 @@ class LLMClient:
             )
         return content
 
+    def _deepseek_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        if self.deepseek_client is None:
+            raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "timeout": api_timeout,
+        }
+        extra_body = _deepseek_extra_body(reasoning_effort)
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        thinking_enabled = _deepseek_thinking_enabled(reasoning_effort)
+        if temperature is not None and _model_supports_temperature(model_name) and not thinking_enabled:
+            kwargs["temperature"] = temperature
+        normalized_effort = _normalize_deepseek_reasoning_effort(reasoning_effort)
+        if normalized_effort:
+            kwargs["reasoning_effort"] = normalized_effort
+        response = _call_with_hard_timeout(
+            "deepseek.chat.completions",
+            api_timeout + 2.0,
+            self.deepseek_client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage("deepseek.chat.completions", model_name, getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "deepseek chat returned empty content model=%s finish_reason=%s usage=%s",
+                model_name,
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
     def _fireworks_chat(
         self,
         messages: list[dict[str, Any]],
@@ -883,6 +970,134 @@ class LLMClient:
             chat_messages,
             model_name,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
+
+    def _deepseek_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        if self.deepseek_client is None:
+            raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+        chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
+        chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        thinking_enabled = _deepseek_thinking_enabled(reasoning_effort)
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": chat_messages,
+                "tools": chat_tools,
+                "tool_choice": "auto",
+                "max_tokens": max_tokens,
+                "timeout": OPENROUTER_TIMEOUT,
+            }
+            extra_body = _deepseek_extra_body(reasoning_effort)
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            normalized_effort = _normalize_deepseek_reasoning_effort(reasoning_effort)
+            if normalized_effort:
+                kwargs["reasoning_effort"] = normalized_effort
+            if temperature is not None and _model_supports_temperature(model_name) and not thinking_enabled:
+                kwargs["temperature"] = temperature
+            LOG.info(
+                "llm_tool_request api=deepseek model=%s round=%s/%s messages=%s tools=%s max_tokens=%s thinking=%s",
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(chat_messages),
+                [tool.get("function", {}).get("name", "") for tool in chat_tools],
+                max_tokens,
+                thinking_enabled,
+            )
+            response = _call_with_hard_timeout(
+                "deepseek.chat.completions",
+                OPENROUTER_TIMEOUT + 5.0,
+                self.deepseek_client.chat.completions.create,
+                **kwargs,
+            )
+            LOG.info(
+                "llm_tool_response api=deepseek model=%s round=%s finish_reason=%s",
+                model_name,
+                round_index + 1,
+                getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
+            )
+            _log_prompt_cache_usage("deepseek.chat.completions", model_name, getattr(response, "usage", None))
+            message = response.choices[0].message
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            if not tool_calls:
+                content = (message.content or "").strip()
+                pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
+                if pseudo_result is not None:
+                    LOG.warning(
+                        "llm_plaintext_tool_call api=deepseek model=%s round=%s result=%s",
+                        model_name,
+                        round_index + 1,
+                        _compact_json(pseudo_result),
+                    )
+                    if isinstance(pseudo_result, dict) and pseudo_result.get("__terminal_response__"):
+                        return str(pseudo_result.get("text", "")).strip()
+                    return ""
+                return content
+            chat_messages.append(_deepseek_assistant_message_dict(message))
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=deepseek model=%s round=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(call.function.arguments),
+                )
+                handler = tool_handlers.get(call.function.name)
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
+                else:
+                    try:
+                        args = json.loads(call.function.arguments or "{}")
+                        result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                LOG.info(
+                    "llm_tool_result api=deepseek model=%s round=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    call.function.name,
+                    call.id,
+                    _compact_json(result),
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                chat_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        LOG.warning("llm_tool_budget_exhausted api=deepseek model=%s rounds=%s forcing_final_answer", model_name, tool_rounds)
+        chat_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Tool budget is exhausted. Produce the final answer now using the tool results already available. "
+                    "Do not call any more tools."
+                ),
+            }
+        )
+        return self._deepseek_chat(
+            chat_messages,
+            model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
             reasoning_effort=reasoning_effort,
         )
 
@@ -1335,9 +1550,11 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "fireworks", "sambanova"}:
+    if value in {"openai", "openrouter", "deepseek", "fireworks", "sambanova"}:
         return value
     model_name = (model or "").strip().lower()
+    if model_name.startswith("deepseek-"):
+        return "deepseek"
     if model_name.startswith("accounts/fireworks/"):
         return "fireworks"
     if "/" in model_name:
@@ -1373,6 +1590,46 @@ def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str
     if _openrouter_prefers_reasoning_budget(model_name):
         payload = {"max_tokens": _reasoning_budget_for_effort(normalized), "exclude": True}
     return {"reasoning": payload}
+
+def _normalize_deepseek_reasoning_effort(value: str | None) -> str:
+    effort = _normalize_reasoning_effort(value, preserve_max=True)
+    if effort in {"", "none"}:
+        return ""
+    if effort in {"minimal", "low", "medium", "high"}:
+        return "high"
+    if effort in {"xhigh", "max"}:
+        return "max"
+    return "high"
+
+def _deepseek_thinking_enabled(value: str | None) -> bool:
+    effort = (value or "").strip().lower()
+    return effort not in {"", "none", "off", "false", "0", "clear", "default"}
+
+def _deepseek_extra_body(reasoning_effort: str | None) -> dict[str, Any]:
+    return {"thinking": {"type": "enabled" if _deepseek_thinking_enabled(reasoning_effort) else "disabled"}}
+
+def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "role": "assistant",
+        "content": getattr(message, "content", "") or "",
+    }
+    reasoning_content = getattr(message, "reasoning_content", None)
+    if reasoning_content:
+        payload["reasoning_content"] = reasoning_content
+    tool_calls = list(getattr(message, "tool_calls", None) or [])
+    if tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function.name,
+                    "arguments": call.function.arguments or "{}",
+                },
+            }
+            for call in tool_calls
+        ]
+    return payload
 
 def _reply_gate_json_schema() -> dict[str, Any]:
     return {
