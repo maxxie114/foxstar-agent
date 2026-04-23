@@ -28,11 +28,11 @@ from zoneinfo import ZoneInfo
 
 from .config import ModelConfig
 
-REQUEST_TIMEOUT = 25.0
+REQUEST_TIMEOUT = 60.0
 
 REPLY_GATE_TIMEOUT = 6.0
 
-RESPONSES_TIMEOUT = 18.0
+RESPONSES_TIMEOUT = 45.0
 
 OPENROUTER_TIMEOUT = 55.0
 
@@ -69,7 +69,7 @@ class LLMClient:
             import httpx
         except Exception as exc:
             raise RuntimeError("需要安装 openai Python SDK") from exc
-        timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=20.0, write=10.0, pool=5.0)
+        timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=55.0, write=20.0, pool=10.0)
         self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
         self.openrouter_client = (
             OpenAI(
