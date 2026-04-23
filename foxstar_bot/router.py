@@ -26,6 +26,28 @@ LOG = logging.getLogger(__name__)
 
 from typing import Any
 
+def delivery_parts_for_style(reply: str, style_value: object, line_chars: int | None = None) -> list[str]:
+    text = (reply or "").strip()
+    if not text:
+        return []
+    style = parse_stored_style(str(style_value or "strict"))
+    if style.format_style == "free":
+        return [text]
+    if style.format_style == "human":
+        return split_reply_messages(
+            text,
+            max_messages=0,
+            max_single_chars=140,
+            max_line_chars=line_chars or 70,
+            split_on_sentences=True,
+        )
+    return split_reply_messages(
+        text,
+        max_messages=0,
+        max_line_chars=line_chars or 45,
+        split_on_sentences=True,
+    )
+
 def _parse_reply_decision(decision: str) -> bool:
     first = (decision or "").strip().split()
     if not first:
