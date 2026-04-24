@@ -586,6 +586,7 @@ class LLMClient:
         try:
             retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
             tool_rounds = max(1, min(max_tool_rounds, 12))
+            failed_tool_signatures: dict[tuple[str, str], int] = {}
             for round_index in range(tool_rounds):
                 kwargs: dict[str, Any] = {
                     "model": model_name,
@@ -650,14 +651,20 @@ class LLMClient:
                         _compact_json(call.arguments),
                     )
                     handler = tool_handlers.get(call.name)
+                    args: dict[str, Any] = {}
                     if handler is None:
                         result = {"ok": False, "error": f"unknown tool: {call.name}"}
                     else:
                         try:
                             args = json.loads(call.arguments or "{}")
-                            result = handler(**args)
+                            blocked = _blocked_repeated_failed_tool_call(failed_tool_signatures, call.name, args)
+                            if blocked is not None:
+                                result = blocked
+                            else:
+                                result = handler(**args)
                         except Exception as exc:
                             result = {"ok": False, "error": str(exc)}
+                    _remember_failed_tool_signature(failed_tool_signatures, call.name, args, result)
                     LOG.info(
                         "llm_tool_result api=responses model=%s round=%s name=%s call_id=%s result=%s",
                         model_name,
@@ -863,6 +870,47 @@ class LLMClient:
             )
         return content
 
+    def _together_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        try:
+            return self._compatible_chat(
+                client=self.together_client,
+                provider_name="together",
+                messages=messages,
+                model_name=model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        except Exception as exc:
+            fallback_model = _together_openrouter_fallback_model(model_name)
+            if not _should_fallback_together_error(exc, fallback_model, self.openrouter_client):
+                raise
+            LOG.warning(
+                "together provider error; falling back to openrouter model=%s fallback_model=%s reason=%s",
+                model_name,
+                fallback_model,
+                str(exc),
+            )
+            return self._openrouter_chat(
+                messages,
+                fallback_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=self.config.reasoning_effort,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+
     def _lightning_chat(
         self,
         messages: list[dict[str, Any]],
@@ -1027,6 +1075,7 @@ class LLMClient:
         chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
         chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
         tool_rounds = max(1, min(max_tool_rounds, 12))
+        failed_tool_signatures: dict[tuple[str, str], int] = {}
         for round_index in range(tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": model_name,
@@ -1098,14 +1147,20 @@ class LLMClient:
                     _compact_json(call.function.arguments),
                 )
                 handler = tool_handlers.get(call.function.name)
+                args: dict[str, Any] = {}
                 if handler is None:
                     result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
                 else:
                     try:
                         args = json.loads(call.function.arguments or "{}")
-                        result = handler(**args)
+                        blocked = _blocked_repeated_failed_tool_call(failed_tool_signatures, call.function.name, args)
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = handler(**args)
                     except Exception as exc:
                         result = {"ok": False, "error": str(exc)}
+                _remember_failed_tool_signature(failed_tool_signatures, call.function.name, args, result)
                 LOG.info(
                     "llm_tool_result api=openrouter model=%s round=%s name=%s call_id=%s result=%s",
                     model_name,
@@ -1160,6 +1215,7 @@ class LLMClient:
         chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
         tool_rounds = max(1, min(max_tool_rounds, 12))
         thinking_enabled = _deepseek_thinking_enabled(reasoning_effort)
+        failed_tool_signatures: dict[tuple[str, str], int] = {}
         for round_index in range(tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": model_name,
@@ -1228,14 +1284,20 @@ class LLMClient:
                     _compact_json(call.function.arguments),
                 )
                 handler = tool_handlers.get(call.function.name)
+                args: dict[str, Any] = {}
                 if handler is None:
                     result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
                 else:
                     try:
                         args = json.loads(call.function.arguments or "{}")
-                        result = handler(**args)
+                        blocked = _blocked_repeated_failed_tool_call(failed_tool_signatures, call.function.name, args)
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = handler(**args)
                     except Exception as exc:
                         result = {"ok": False, "error": str(exc)}
+                _remember_failed_tool_signature(failed_tool_signatures, call.function.name, args, result)
                 LOG.info(
                     "llm_tool_result api=deepseek model=%s round=%s name=%s call_id=%s result=%s",
                     model_name,
@@ -1271,6 +1333,50 @@ class LLMClient:
             reasoning_effort=reasoning_effort,
             usage_context=usage_context,
         )
+
+    def _together_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        try:
+            return self._compatible_chat_with_tools(
+                client=self.together_client,
+                provider_name="together",
+                messages=messages,
+                tools=tools,
+                tool_handlers=tool_handlers,
+                model_name=model_name,
+                max_tokens=max_tokens,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        except Exception as exc:
+            fallback_model = _together_openrouter_fallback_model(model_name)
+            if not _should_fallback_together_error(exc, fallback_model, self.openrouter_client):
+                raise
+            LOG.warning(
+                "together provider error during tool run; falling back to openrouter model=%s fallback_model=%s reason=%s",
+                model_name,
+                fallback_model,
+                str(exc),
+            )
+            return self._openrouter_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                fallback_model,
+                max_tokens=max_tokens,
+                reasoning_effort=self.config.reasoning_effort,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
 
     def _lightning_chat_with_tools(
         self,
@@ -1785,13 +1891,20 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
     return citations
 
 def _chat_messages_for_provider(messages: list[dict[str, Any]], *, use_content_parts: bool = False) -> list[dict[str, Any]]:
-    return [
-        {
+    rendered: list[dict[str, Any]] = []
+    for item in messages:
+        payload: dict[str, Any] = {
             "role": item.get("role", "user"),
             "content": _provider_text_content(item.get("content", ""), use_content_parts),
         }
-        for item in messages
-    ]
+        if item.get("tool_call_id"):
+            payload["tool_call_id"] = item["tool_call_id"]
+        if item.get("tool_calls"):
+            payload["tool_calls"] = item["tool_calls"]
+        if item.get("reasoning_content"):
+            payload["reasoning_content"] = item["reasoning_content"]
+        rendered.append(payload)
+    return rendered
 
 def _provider_text_content(content: Any, use_content_parts: bool) -> Any:
     if not use_content_parts:
@@ -2044,6 +2157,73 @@ def _together_openrouter_fallback_model(model: str) -> str:
         "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
     }
     return mapping.get(lowered, value)
+
+def _should_fallback_together_error(exc: Exception, fallback_model: str, openrouter_client: Any) -> bool:
+    if openrouter_client is None:
+        return False
+    text = str(exc).lower()
+    retryable_429 = ("429" in text or "ratelimit" in text or "rate limit" in text) and (
+        "dynamic_rate_limit" in text or "too many requests" in text
+    )
+    retryable_5xx = (
+        "500" in text
+        or "502" in text
+        or "503" in text
+        or "504" in text
+        or "internal server error" in text
+        or "server_error" in text
+        or "bad gateway" in text
+        or "service unavailable" in text
+        or "gateway timeout" in text
+    )
+    if not retryable_429 and not retryable_5xx:
+        return False
+    return bool(fallback_model)
+
+def _tool_failure_signature(name: str, args: dict[str, Any], result: Any) -> tuple[str, str] | None:
+    if not isinstance(result, dict):
+        return None
+    if result.get("ok") is True:
+        return None
+    if result.get("__terminal_response__"):
+        return None
+    error = str(result.get("error", "") or result.get("reason", "")).strip().lower()
+    args_sig = _compact_json(args)[:160]
+    if error:
+        error = re.sub(r"\s+", " ", error)[:160]
+    else:
+        error = "non_ok"
+    return ((name or "").strip(), f"{args_sig}|{error}")
+
+def _remember_failed_tool_signature(
+    failed_tool_signatures: dict[tuple[str, str], int],
+    name: str,
+    args: dict[str, Any],
+    result: Any,
+) -> None:
+    signature = _tool_failure_signature(name, args, result)
+    if signature is None:
+        return
+    failed_tool_signatures[signature] = failed_tool_signatures.get(signature, 0) + 1
+
+def _blocked_repeated_failed_tool_call(
+    failed_tool_signatures: dict[tuple[str, str], int],
+    name: str,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    compact_args = _compact_json(args)[:160]
+    for (tool_name, failure_key), count in failed_tool_signatures.items():
+        if tool_name != (name or "").strip():
+            continue
+        if count < 1:
+            continue
+        if compact_args and failure_key.startswith(compact_args):
+            return {
+                "ok": False,
+                "error": "Repeated failed tool method blocked. Switch to a different method instead of retrying the same failing approach.",
+                "__guardrail_blocked__": True,
+            }
+    return None
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
