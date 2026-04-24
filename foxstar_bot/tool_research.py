@@ -35,7 +35,7 @@ class WebResearchAgent:
         self.url_fetch = url_fetch
         self.llm = llm
 
-    def _openai_web_search(self, query: str, *, run_id: str) -> str:
+    def _openai_web_search(self, query: str, *, run_id: str, chat_id: str = "") -> str:
         model = self.search.config.tools.openai_web_search_model or "gpt-5"
         effort = self.search.config.tools.openai_web_search_reasoning_effort or "low"
         max_tokens = self.search.config.tools.openai_web_search_max_output_tokens or 3000
@@ -52,10 +52,11 @@ class WebResearchAgent:
             reasoning_effort=effort,
             max_output_tokens=max_tokens,
             timeout=55.0,
+            usage_context={"chat_id": chat_id, "feature": "web_research"},
         )
         return f"OpenAI web_search subagent result:\n{result}"
 
-    def _agentic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str) -> str:
+    def _agentic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str, chat_id: str = "") -> str:
         searched: list[str] = []
         fetched: list[ResearchPage] = []
         started_at = time.monotonic()
@@ -176,11 +177,12 @@ class WebResearchAgent:
             verbosity="low",
             provider="openai",
             max_tool_rounds=max_search_calls + max_pages,
+            usage_context={"chat_id": chat_id, "feature": "web_research"},
         )
         LOG.info("web_research agent_return run=%s searched=%s fetched=%s answer_chars=%s", run_id, len(searched), len(fetched), len(answer or ""))
         return self._format_agent_report(answer, searched, fetched)
 
-    def _deterministic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str = "fallback") -> str:
+    def _deterministic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str = "fallback", chat_id: str = "") -> str:
         seen_urls: set[str] = set()
         queries = [query]
         pages: list[ResearchPage] = []
@@ -212,12 +214,12 @@ class WebResearchAgent:
 
             if round_index + 1 >= max_rounds or len(pages) >= max_pages:
                 break
-            followups = self._plan_followups(query, searched, pages, run_id=run_id)
+            followups = self._plan_followups(query, searched, pages, run_id=run_id, chat_id=chat_id)
             for followup in followups:
                 if followup and followup not in searched and followup not in queries:
                     queries.append(followup)
 
-        return self._synthesize(query, searched, pages)
+        return self._synthesize(query, searched, pages, chat_id=chat_id)
 
     def _format_agent_report(self, report: str, searched: list[str], pages: list[ResearchPage]) -> str:
         body = " ".join((report or "").strip().split())
@@ -244,7 +246,7 @@ class WebResearchAgent:
                 return None
             return ResearchPage(title=result.title, url=result.url, text=snippet[:2000], source=result.source)
 
-    def _plan_followups(self, original_query: str, searched: list[str], pages: list[ResearchPage], run_id: str = "fallback") -> list[str]:
+    def _plan_followups(self, original_query: str, searched: list[str], pages: list[ResearchPage], run_id: str = "fallback", chat_id: str = "") -> list[str]:
         page_notes = "\n\n".join(_page_note(page, limit=900) for page in pages[:5])
         prompt = (
             "You are a web research planner. The current search results may be irrelevant.\n"
@@ -265,6 +267,7 @@ class WebResearchAgent:
                 reasoning_effort="low",
                 verbosity="low",
                 timeout=8.0,
+                usage_context={"chat_id": chat_id, "feature": "web_research"},
             )
             data = json.loads(_strip_json_fence(raw))
             values = data.get("follow_up_queries", [])
@@ -276,7 +279,7 @@ class WebResearchAgent:
             LOG.warning("web_research followup planning failed reason=%s", exc)
         return []
 
-    def _synthesize(self, original_query: str, searched: list[str], pages: list[ResearchPage]) -> str:
+    def _synthesize(self, original_query: str, searched: list[str], pages: list[ResearchPage], chat_id: str = "") -> str:
         if not pages:
             return f"Web research did not find usable pages.\nQueries searched: {searched}"
         page_notes = "\n\n".join(_page_note(page, limit=1000) for page in pages[:6])
@@ -301,6 +304,7 @@ class WebResearchAgent:
                 reasoning_effort="low",
                 verbosity="low",
                 timeout=25.0,
+                usage_context={"chat_id": chat_id, "feature": "web_research"},
             )
         except Exception as exc:
             LOG.warning("web_research synthesis failed reason=%s", exc)

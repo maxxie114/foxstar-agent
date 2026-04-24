@@ -125,6 +125,21 @@ class Database:
                     last_message TEXT,
                     last_seen_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS token_usage_daily (
+                    chat_id TEXT NOT NULL,
+                    bucket_date TEXT NOT NULL,
+                    feature TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    api TEXT NOT NULL,
+                    requests INTEGER NOT NULL DEFAULT 0,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cached_tokens INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(chat_id, bucket_date, feature, provider, model, api)
+                );
+                CREATE INDEX IF NOT EXISTS idx_token_usage_daily_chat_date ON token_usage_daily(chat_id, bucket_date);
                 """
             )
             for statement in (
@@ -156,3 +171,86 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, payload),
             )
+
+    def record_token_usage(
+        self,
+        *,
+        chat_id: str,
+        feature: str,
+        provider: str,
+        model: str,
+        api: str,
+        input_tokens: int,
+        output_tokens: int,
+        cached_tokens: int = 0,
+    ) -> None:
+        bucket_date = datetime.now(timezone.utc).date().isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO token_usage_daily(
+                    chat_id, bucket_date, feature, provider, model, api,
+                    requests, input_tokens, output_tokens, cached_tokens
+                )
+                VALUES(?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                ON CONFLICT(chat_id, bucket_date, feature, provider, model, api) DO UPDATE SET
+                    requests = requests + 1,
+                    input_tokens = input_tokens + excluded.input_tokens,
+                    output_tokens = output_tokens + excluded.output_tokens,
+                    cached_tokens = cached_tokens + excluded.cached_tokens
+                """,
+                (
+                    chat_id,
+                    bucket_date,
+                    feature,
+                    provider,
+                    model,
+                    api,
+                    int(input_tokens or 0),
+                    int(output_tokens or 0),
+                    int(cached_tokens or 0),
+                ),
+            )
+
+    def token_usage_summary(self, chat_id: str, *, days: int | None = 7) -> dict[str, Any]:
+        params: list[Any] = [chat_id]
+        where = "WHERE chat_id = ?"
+        if days is not None:
+            cutoff = datetime.now(timezone.utc).date().fromordinal(datetime.now(timezone.utc).date().toordinal() - max(days - 1, 0)).isoformat()
+            where += " AND bucket_date >= ?"
+            params.append(cutoff)
+        with self.connect() as conn:
+            total = conn.execute(
+                f"""
+                SELECT
+                    COALESCE(SUM(requests), 0) AS requests,
+                    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cached_tokens), 0) AS cached_tokens
+                FROM token_usage_daily
+                {where}
+                """,
+                tuple(params),
+            ).fetchone()
+            by_feature = conn.execute(
+                f"""
+                SELECT
+                    feature,
+                    SUM(requests) AS requests,
+                    SUM(input_tokens) AS input_tokens,
+                    SUM(output_tokens) AS output_tokens,
+                    SUM(cached_tokens) AS cached_tokens
+                FROM token_usage_daily
+                {where}
+                GROUP BY feature
+                ORDER BY SUM(input_tokens + output_tokens) DESC, feature ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        return {
+            "requests": int(total["requests"] or 0),
+            "input_tokens": int(total["input_tokens"] or 0),
+            "output_tokens": int(total["output_tokens"] or 0),
+            "cached_tokens": int(total["cached_tokens"] or 0),
+            "by_feature": [dict(row) for row in by_feature],
+        }

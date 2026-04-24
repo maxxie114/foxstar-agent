@@ -64,6 +64,7 @@ class LLMClient:
         lightning_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
+        usage_recorder: Any | None = None,
     ) -> None:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY 未配置")
@@ -140,6 +141,7 @@ class LLMClient:
         )
         self.config = model_config
         self.gemini_api_key = gemini_api_key
+        self.usage_recorder = usage_recorder
 
     def chat(
         self,
@@ -154,6 +156,7 @@ class LLMClient:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
@@ -165,6 +168,7 @@ class LLMClient:
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         if resolved_provider == "deepseek":
             return self._deepseek_chat(
@@ -174,6 +178,7 @@ class LLMClient:
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         if resolved_provider == "together":
             return self._together_chat(
@@ -182,6 +187,7 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         if resolved_provider == "lightning":
             return self._lightning_chat(
@@ -190,6 +196,7 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         if resolved_provider == "fireworks":
             return self._fireworks_chat(
@@ -198,6 +205,7 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         if resolved_provider == "sambanova":
             return self._sambanova_chat(
@@ -206,6 +214,7 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 timeout=timeout,
+                usage_context=usage_context,
             )
         api_timeout = float(timeout or OPENROUTER_TIMEOUT)
         kwargs: dict[str, Any] = {
@@ -233,6 +242,7 @@ class LLMClient:
             **kwargs,
         )
         _log_prompt_cache_usage("chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="chat.completions", model=model_name, provider="openai", usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -257,6 +267,7 @@ class LLMClient:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
@@ -269,6 +280,7 @@ class LLMClient:
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="openrouter",
+                usage_context=usage_context,
             )
         if resolved_provider == "deepseek":
             return self.chat(
@@ -279,6 +291,7 @@ class LLMClient:
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="deepseek",
+                usage_context=usage_context,
             )
         if resolved_provider == "together":
             return self.chat(
@@ -288,6 +301,7 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="together",
+                usage_context=usage_context,
             )
         if resolved_provider == "lightning":
             return self.chat(
@@ -297,6 +311,7 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="lightning",
+                usage_context=usage_context,
             )
         if resolved_provider == "fireworks":
             return self.chat(
@@ -306,6 +321,7 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="fireworks",
+                usage_context=usage_context,
             )
         if resolved_provider == "sambanova":
             return self.chat(
@@ -315,6 +331,7 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="sambanova",
+                usage_context=usage_context,
             )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
         instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
@@ -344,6 +361,7 @@ class LLMClient:
             kwargs["prompt_cache_retention"] = retention
         response = _openai_call_with_retry("responses.create", api_timeout + 2.0, self.client.responses.create, **kwargs)
         _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="responses.create", model=model_name, provider="openai", usage=getattr(response, "usage", None))
         if getattr(response, "status", "") == "incomplete":
             LOG.warning(
                 "responses incomplete model=%s details=%s usage=%s",
@@ -368,6 +386,7 @@ class LLMClient:
         reasoning_effort: str = "low",
         max_output_tokens: int = 6000,
         timeout: float = 55.0,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         search_query = " ".join((query or "").split()).strip()
         if not search_query:
@@ -443,6 +462,7 @@ class LLMClient:
             len(getattr(response, "output_text", "") or ""),
         )
         _log_prompt_cache_usage("responses.web_search", model, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="responses.web_search", model=model, provider="openai", usage=getattr(response, "usage", None))
         for item in output_items:
             item_type = getattr(item, "type", "")
             if item_type == "web_search_call":
@@ -476,6 +496,7 @@ class LLMClient:
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
@@ -488,6 +509,7 @@ class LLMClient:
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if resolved_provider == "deepseek":
             return self._deepseek_chat_with_tools(
@@ -499,6 +521,7 @@ class LLMClient:
                 temperature=self.config.temperature,
                 reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if resolved_provider == "together":
             return self._together_chat_with_tools(
@@ -508,6 +531,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if resolved_provider == "lightning":
             return self._lightning_chat_with_tools(
@@ -517,6 +541,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if resolved_provider == "fireworks":
             return self._fireworks_chat_with_tools(
@@ -526,6 +551,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if resolved_provider == "sambanova":
             return self._sambanova_chat_with_tools(
@@ -535,6 +561,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
             )
         if not tools:
             return self.chat(
@@ -546,6 +573,7 @@ class LLMClient:
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 provider=resolved_provider,
+                usage_context=usage_context,
             )
 
         instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
@@ -605,6 +633,7 @@ class LLMClient:
                     len(list(response.output or [])),
                 )
                 _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
+                self._record_usage(usage_context, api="responses.create", model=model_name, provider="openai", usage=getattr(response, "usage", None))
                 output = list(response.output or [])
                 input_items.extend(output)
                 tool_calls = [item for item in output if getattr(item, "type", "") == "function_call"]
@@ -670,6 +699,7 @@ class LLMClient:
                         verbosity=verbosity,
                         prompt_cache_key=prompt_cache_key,
                         prompt_cache_retention=prompt_cache_retention,
+                        usage_context=usage_context,
                     )
                 except Exception as final_exc:
                     LOG.warning("responses forced final failed after tool error: %s", final_exc)
@@ -685,6 +715,7 @@ class LLMClient:
                 prompt_cache_key=prompt_cache_key,
                 prompt_cache_retention=prompt_cache_retention,
                 provider=resolved_provider,
+                usage_context=usage_context,
             )
 
     def _responses_final_from_items(
@@ -698,6 +729,7 @@ class LLMClient:
         verbosity: str | None = None,
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         final_input = list(input_items)
         final_input.append(
@@ -730,6 +762,7 @@ class LLMClient:
         LOG.info("llm_tool_forced_final api=responses model=%s input_items=%s max_output_tokens=%s", model_name, len(final_input), max_output_tokens)
         response = _openai_call_with_retry("responses.final", RESPONSES_TIMEOUT + 2.0, self.client.responses.create, **kwargs)
         _log_prompt_cache_usage("responses.final", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="responses.final", model=model_name, provider="openai", usage=getattr(response, "usage", None))
         return (response.output_text or "").strip()
 
     def _openrouter_chat(
@@ -741,6 +774,7 @@ class LLMClient:
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.openrouter_client is None:
             raise RuntimeError("OPENROUTER_API_KEY is not configured")
@@ -769,6 +803,7 @@ class LLMClient:
             kwargs,
         )
         _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="openrouter.chat.completions", model=model_name, provider="openrouter", usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -789,6 +824,7 @@ class LLMClient:
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.deepseek_client is None:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured")
@@ -815,6 +851,7 @@ class LLMClient:
             **kwargs,
         )
         _log_prompt_cache_usage("deepseek.chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="deepseek.chat.completions", model=model_name, provider="deepseek", usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -834,6 +871,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float | None = None,
         timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         return self._compatible_chat(
             client=self.lightning_client,
@@ -844,6 +882,7 @@ class LLMClient:
             temperature=temperature,
             timeout=timeout,
             use_content_parts=True,
+            usage_context=usage_context,
         )
 
     def _compatible_chat(
@@ -857,6 +896,7 @@ class LLMClient:
         temperature: float | None = None,
         timeout: float | None = None,
         use_content_parts: bool = False,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if client is None:
             raise RuntimeError(f"{provider_name.upper()}_API_KEY is not configured")
@@ -876,6 +916,7 @@ class LLMClient:
             **kwargs,
         )
         _log_prompt_cache_usage(f"{provider_name}.chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api=f"{provider_name}.chat.completions", model=model_name, provider=provider_name, usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -896,6 +937,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float | None = None,
         timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.fireworks_client is None:
             raise RuntimeError("FIREWORKS_API_KEY is not configured")
@@ -916,6 +958,7 @@ class LLMClient:
             **kwargs,
         )
         _log_prompt_cache_usage("fireworks.chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="fireworks.chat.completions", model=model_name, provider="fireworks", usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -935,6 +978,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float | None = None,
         timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.sambanova_client is None:
             raise RuntimeError("SAMBA_NOVA_KEY is not configured")
@@ -954,6 +998,7 @@ class LLMClient:
             **kwargs,
         )
         _log_prompt_cache_usage("sambanova.chat.completions", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="sambanova.chat.completions", model=model_name, provider="sambanova", usage=getattr(response, "usage", None))
         choice = response.choices[0]
         content = (choice.message.content or "").strip()
         if not content:
@@ -975,6 +1020,7 @@ class LLMClient:
         max_tokens: int,
         reasoning_effort: str | None = None,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.openrouter_client is None:
             raise RuntimeError("OPENROUTER_API_KEY is not configured")
@@ -1024,6 +1070,7 @@ class LLMClient:
                 getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
             )
             _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api="openrouter.chat.completions", model=model_name, provider="openrouter", usage=getattr(response, "usage", None))
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
@@ -1091,6 +1138,7 @@ class LLMClient:
             model_name,
             max_tokens=max_tokens,
             reasoning_effort=reasoning_effort,
+            usage_context=usage_context,
         )
 
     def _deepseek_chat_with_tools(
@@ -1104,6 +1152,7 @@ class LLMClient:
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.deepseek_client is None:
             raise RuntimeError("DEEPSEEK_API_KEY is not configured")
@@ -1151,6 +1200,7 @@ class LLMClient:
                 getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
             )
             _log_prompt_cache_usage("deepseek.chat.completions", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api="deepseek.chat.completions", model=model_name, provider="deepseek", usage=getattr(response, "usage", None))
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
@@ -1219,6 +1269,7 @@ class LLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+            usage_context=usage_context,
         )
 
     def _lightning_chat_with_tools(
@@ -1230,6 +1281,7 @@ class LLMClient:
         *,
         max_tokens: int,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         return self._compatible_chat_with_tools(
             client=self.lightning_client,
@@ -1241,6 +1293,7 @@ class LLMClient:
             max_tokens=max_tokens,
             max_tool_rounds=max_tool_rounds,
             use_content_parts=True,
+            usage_context=usage_context,
         )
 
     def _fireworks_chat_with_tools(
@@ -1252,6 +1305,7 @@ class LLMClient:
         *,
         max_tokens: int,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.fireworks_client is None:
             raise RuntimeError("FIREWORKS_API_KEY is not configured")
@@ -1293,6 +1347,7 @@ class LLMClient:
                 getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
             )
             _log_prompt_cache_usage("fireworks.chat.completions", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api="fireworks.chat.completions", model=model_name, provider="fireworks", usage=getattr(response, "usage", None))
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
@@ -1362,7 +1417,7 @@ class LLMClient:
                     }
                 )
         LOG.warning("llm_tool_budget_exhausted api=fireworks model=%s rounds=%s", model_name, tool_rounds)
-        return self._fireworks_chat(chat_messages, model_name, max_tokens=max_tokens)
+        return self._fireworks_chat(chat_messages, model_name, max_tokens=max_tokens, usage_context=usage_context)
 
     def _sambanova_chat_with_tools(
         self,
@@ -1373,6 +1428,7 @@ class LLMClient:
         *,
         max_tokens: int,
         max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.sambanova_client is None:
             raise RuntimeError("SAMBA_NOVA_KEY is not configured")
@@ -1413,6 +1469,7 @@ class LLMClient:
                 getattr(response.choices[0], "finish_reason", None) if getattr(response, "choices", None) else None,
             )
             _log_prompt_cache_usage("sambanova.chat.completions", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api="sambanova.chat.completions", model=model_name, provider="sambanova", usage=getattr(response, "usage", None))
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
@@ -1482,7 +1539,40 @@ class LLMClient:
                     }
                 )
         LOG.warning("llm_tool_budget_exhausted api=sambanova model=%s rounds=%s", model_name, tool_rounds)
-        return self._sambanova_chat(chat_messages, model_name, max_tokens=max_tokens)
+        return self._sambanova_chat(chat_messages, model_name, max_tokens=max_tokens, usage_context=usage_context)
+
+    def _record_usage(
+        self,
+        usage_context: dict[str, Any] | None,
+        *,
+        api: str,
+        model: str,
+        provider: str,
+        usage: Any,
+    ) -> None:
+        if not usage_context or usage is None or self.usage_recorder is None:
+            return
+        chat_id = str(usage_context.get("chat_id") or "").strip()
+        if not chat_id:
+            return
+        input_tokens, output_tokens, cached_tokens = _usage_totals(usage)
+        if input_tokens <= 0 and output_tokens <= 0 and cached_tokens <= 0:
+            return
+        try:
+            self.usage_recorder(
+                {
+                    "chat_id": chat_id,
+                    "feature": str(usage_context.get("feature") or "unknown"),
+                    "provider": provider,
+                    "model": model,
+                    "api": api,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cached_tokens": cached_tokens,
+                }
+            )
+        except Exception:
+            LOG.exception("token_usage_record_failed chat=%s feature=%s api=%s model=%s", chat_id, usage_context.get("feature"), api, model)
 
     def analyze_image(self, image_path: Path, prompt: str) -> str:
         if self.config.vision_provider == "gemini":
@@ -1973,6 +2063,18 @@ def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
     if total is None and cached is None:
         return
     LOG.debug("prompt_cache api=%s model=%s cached_tokens=%s input_tokens=%s", api, model, cached or 0, total or 0)
+
+def _usage_totals(usage: Any) -> tuple[int, int, int]:
+    input_tokens = _usage_value(usage, "prompt_tokens")
+    if input_tokens is None:
+        input_tokens = _usage_value(usage, "input_tokens")
+    output_tokens = _usage_value(usage, "completion_tokens")
+    if output_tokens is None:
+        output_tokens = _usage_value(usage, "output_tokens")
+    cached_tokens = _usage_nested_value(usage, "prompt_tokens_details", "cached_tokens")
+    if cached_tokens is None:
+        cached_tokens = _usage_nested_value(usage, "input_tokens_details", "cached_tokens")
+    return int(input_tokens or 0), int(output_tokens or 0), int(cached_tokens or 0)
 
 def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     parent_value = _usage_value(usage, parent)
