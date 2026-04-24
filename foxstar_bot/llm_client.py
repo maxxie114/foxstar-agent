@@ -1059,23 +1059,7 @@ class LLMClient:
                         return str(pseudo_result.get("text", "")).strip()
                     return ""
                 return content
-            chat_messages.append(
-                {
-                    "role": "assistant",
-                    "content": message.content or "",
-                    "tool_calls": [
-                        {
-                            "id": call.id,
-                            "type": "function",
-                            "function": {
-                                "name": call.function.name,
-                                "arguments": call.function.arguments or "{}",
-                            },
-                        }
-                        for call in tool_calls
-                    ],
-                }
-            )
+            chat_messages.append(_assistant_tool_message(message))
             for call in tool_calls:
                 LOG.info(
                     "llm_tool_call api=openrouter model=%s round=%s name=%s call_id=%s args=%s",
@@ -1667,6 +1651,10 @@ def _is_unsupported_reasoning_error(exc: Exception) -> bool:
     if isinstance(status_code, int) and status_code not in {400, 422}:
         return False
     text = str(exc).lower()
+    if "reasoning_content" in text and "passed back" in text:
+        return False
+    if "must be passed back" in text:
+        return False
     if "reasoning" in text or "thinking" in text:
         return any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid", "not support", "does not support"))
     return "extra_body" in text and any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid"))
