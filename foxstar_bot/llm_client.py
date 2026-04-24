@@ -826,25 +826,6 @@ class LLMClient:
             )
         return content
 
-    def _together_chat(
-        self,
-        messages: list[dict[str, Any]],
-        model_name: str,
-        *,
-        max_tokens: int,
-        temperature: float | None = None,
-        timeout: float | None = None,
-    ) -> str:
-        return self._compatible_chat(
-            client=self.together_client,
-            provider_name="together",
-            messages=messages,
-            model_name=model_name,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout,
-        )
-
     def _lightning_chat(
         self,
         messages: list[dict[str, Any]],
@@ -1238,27 +1219,6 @@ class LLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
-        )
-
-    def _together_chat_with_tools(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        tool_handlers: dict[str, Any],
-        model_name: str,
-        *,
-        max_tokens: int,
-        max_tool_rounds: int = 4,
-    ) -> str:
-        return self._compatible_chat_with_tools(
-            client=self.together_client,
-            provider_name="together",
-            messages=messages,
-            tools=tools,
-            tool_handlers=tool_handlers,
-            model_name=model_name,
-            max_tokens=max_tokens,
-            max_tool_rounds=max_tool_rounds,
         )
 
     def _lightning_chat_with_tools(
@@ -1983,6 +1943,17 @@ def _canonicalize_model_name(model: str) -> str:
     if lowered.startswith(("gpt-", "o1", "o3", "o4")):
         return lowered
     return value
+
+def _together_openrouter_fallback_model(model: str) -> str:
+    value = (model or "").strip()
+    lowered = value.lower()
+    mapping = {
+        "deepseek-ai/deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+        "deepseek-ai/deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+        "deepseek-v4-pro": "deepseek/deepseek-v4-pro",
+        "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
+    }
+    return mapping.get(lowered, value)
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
