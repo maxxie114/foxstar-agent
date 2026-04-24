@@ -247,10 +247,31 @@ class Database:
                 """,
                 tuple(params),
             ).fetchall()
+            by_model = conn.execute(
+                f"""
+                SELECT
+                    provider,
+                    model,
+                    SUM(requests) AS requests,
+                    SUM(input_tokens) AS input_tokens,
+                    SUM(output_tokens) AS output_tokens,
+                    SUM(cached_tokens) AS cached_tokens
+                FROM token_usage_daily
+                {where}
+                GROUP BY provider, model
+                ORDER BY SUM(input_tokens + output_tokens) DESC, provider ASC, model ASC
+                """,
+                tuple(params),
+            ).fetchall()
         return {
             "requests": int(total["requests"] or 0),
             "input_tokens": int(total["input_tokens"] or 0),
             "output_tokens": int(total["output_tokens"] or 0),
             "cached_tokens": int(total["cached_tokens"] or 0),
             "by_feature": [dict(row) for row in by_feature],
+            "by_model": [dict(row) for row in by_model],
         }
+
+    def clear_token_usage(self, chat_id: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM token_usage_daily WHERE chat_id = ?", (chat_id,))
