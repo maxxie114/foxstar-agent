@@ -60,6 +60,8 @@ class LLMClient:
         gemini_api_key: str = "",
         openrouter_api_key: str = "",
         deepseek_api_key: str = "",
+        together_api_key: str = "",
+        lightning_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
     ) -> None:
@@ -94,6 +96,26 @@ class LLMClient:
                 max_retries=0,
             )
             if deepseek_api_key
+            else None
+        )
+        self.together_client = (
+            OpenAI(
+                api_key=together_api_key,
+                base_url="https://api.together.xyz/v1",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if together_api_key
+            else None
+        )
+        self.lightning_client = (
+            OpenAI(
+                api_key=lightning_api_key,
+                base_url="https://lightning.ai/api/v1",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if lightning_api_key
             else None
         )
         self.sambanova_client = (
@@ -151,6 +173,22 @@ class LLMClient:
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
+                timeout=timeout,
+            )
+        if resolved_provider == "together":
+            return self._together_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                timeout=timeout,
+            )
+        if resolved_provider == "lightning":
+            return self._lightning_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
                 timeout=timeout,
             )
         if resolved_provider == "fireworks":
@@ -241,6 +279,24 @@ class LLMClient:
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 provider="deepseek",
+            )
+        if resolved_provider == "together":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="together",
+            )
+        if resolved_provider == "lightning":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="lightning",
             )
         if resolved_provider == "fireworks":
             return self.chat(
@@ -442,6 +498,24 @@ class LLMClient:
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 temperature=self.config.temperature,
                 reasoning_effort=reasoning_effort,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if resolved_provider == "together":
+            return self._together_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+            )
+        if resolved_provider == "lightning":
+            return self._lightning_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
                 max_tool_rounds=max_tool_rounds,
             )
         if resolved_provider == "fireworks":
@@ -746,6 +820,87 @@ class LLMClient:
         if not content:
             LOG.warning(
                 "deepseek chat returned empty content model=%s finish_reason=%s usage=%s",
+                model_name,
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
+    def _together_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        return self._compatible_chat(
+            client=self.together_client,
+            provider_name="together",
+            messages=messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+        )
+
+    def _lightning_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        return self._compatible_chat(
+            client=self.lightning_client,
+            provider_name="lightning",
+            messages=messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            use_content_parts=True,
+        )
+
+    def _compatible_chat(
+        self,
+        *,
+        client: Any,
+        provider_name: str,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+        use_content_parts: bool = False,
+    ) -> str:
+        if client is None:
+            raise RuntimeError(f"{provider_name.upper()}_API_KEY is not configured")
+        api_timeout = float(timeout or OPENROUTER_TIMEOUT)
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "messages": _chat_messages_for_provider(messages, use_content_parts=use_content_parts),
+            "max_tokens": max_tokens,
+            "timeout": api_timeout,
+        }
+        if temperature is not None and _model_supports_temperature(model_name):
+            kwargs["temperature"] = temperature
+        response = _call_with_hard_timeout(
+            f"{provider_name}.chat.completions",
+            api_timeout + 2.0,
+            client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage(f"{provider_name}.chat.completions", model_name, getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "%s chat returned empty content model=%s finish_reason=%s usage=%s",
+                provider_name,
                 model_name,
                 getattr(choice, "finish_reason", None),
                 getattr(response, "usage", None),
@@ -1099,6 +1254,49 @@ class LLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             reasoning_effort=reasoning_effort,
+        )
+
+    def _together_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        return self._compatible_chat_with_tools(
+            client=self.together_client,
+            provider_name="together",
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            max_tool_rounds=max_tool_rounds,
+        )
+
+    def _lightning_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+    ) -> str:
+        return self._compatible_chat_with_tools(
+            client=self.lightning_client,
+            provider_name="lightning",
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            max_tool_rounds=max_tool_rounds,
+            use_content_parts=True,
         )
 
     def _fireworks_chat_with_tools(
@@ -1548,9 +1746,46 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
                 )
     return citations
 
+def _chat_messages_for_provider(messages: list[dict[str, Any]], *, use_content_parts: bool = False) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": item.get("role", "user"),
+            "content": _provider_text_content(item.get("content", ""), use_content_parts),
+        }
+        for item in messages
+    ]
+
+def _provider_text_content(content: Any, use_content_parts: bool) -> Any:
+    if not use_content_parts:
+        return content
+    if isinstance(content, list):
+        return content
+    return [{"type": "text", "text": str(content or "")}]
+
+def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "role": "assistant",
+        "content": _provider_text_content(getattr(message, "content", "") or "", use_content_parts),
+        "tool_calls": [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {
+                    "name": call.function.name,
+                    "arguments": call.function.arguments or "{}",
+                },
+            }
+            for call in list(getattr(message, "tool_calls", None) or [])
+        ],
+    }
+    reasoning_content = getattr(message, "reasoning_content", None)
+    if reasoning_content:
+        payload["reasoning_content"] = reasoning_content
+    return payload
+
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "deepseek", "fireworks", "sambanova"}:
+    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "fireworks", "sambanova"}:
         return value
     model_name = (model or "").strip().lower()
     if model_name.startswith("deepseek-"):
