@@ -2125,8 +2125,10 @@ def _together_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
     if not effort or effort in {"none", "off", "false", "0"}:
         return {}
     return {
-        "reasoning_effort": effort,
-        "reasoning": {"enabled": True},
+        "extra_body": {
+            "reasoning_effort": effort,
+            "reasoning": {"enabled": True},
+        },
     }
 
 def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
