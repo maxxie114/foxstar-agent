@@ -152,6 +152,25 @@ class Database:
                     PRIMARY KEY(chat_id, bucket_date, feature, provider, model, api)
                 );
                 CREATE INDEX IF NOT EXISTS idx_token_usage_daily_chat_date ON token_usage_daily(chat_id, bucket_date);
+
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    schedule_type TEXT NOT NULL,
+                    cron_expr TEXT,
+                    timezone TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    next_run_at TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    run_count INTEGER NOT NULL DEFAULT 0,
+                    last_run_at TEXT,
+                    last_result TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
                 """
             )
             for statement in (
@@ -287,6 +306,110 @@ class Database:
     def clear_token_usage(self, chat_id: str) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM token_usage_daily WHERE chat_id = ?", (chat_id,))
+
+    def add_scheduled_task(
+        self,
+        *,
+        chat_id: str,
+        created_by: str,
+        kind: str,
+        schedule_type: str,
+        cron_expr: str,
+        timezone_name: str,
+        payload: str,
+        next_run_at: str,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO scheduled_tasks(
+                    chat_id, created_by, kind, schedule_type, cron_expr, timezone, payload,
+                    next_run_at, enabled, run_count, last_run_at, last_result, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, 1, 0, NULL, NULL, ?, ?)
+                """,
+                (
+                    chat_id,
+                    created_by,
+                    kind,
+                    schedule_type,
+                    cron_expr,
+                    timezone_name,
+                    payload,
+                    next_run_at,
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def list_scheduled_tasks(self, chat_id: str) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, kind, schedule_type, cron_expr, timezone, payload, next_run_at,
+                       enabled, run_count, last_run_at, last_result, created_by, created_at, updated_at
+                FROM scheduled_tasks
+                WHERE chat_id = ?
+                ORDER BY enabled DESC, next_run_at ASC, id ASC
+                """,
+                (chat_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_scheduled_task(self, chat_id: str, task_id: int) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM scheduled_tasks WHERE chat_id = ? AND id = ?",
+                (chat_id, int(task_id)),
+            )
+            return int(cursor.rowcount or 0)
+
+    def clear_scheduled_tasks(self, chat_id: str) -> int:
+        with self.connect() as conn:
+            cursor = conn.execute("DELETE FROM scheduled_tasks WHERE chat_id = ?", (chat_id,))
+            return int(cursor.rowcount or 0)
+
+    def due_scheduled_tasks(self, *, now_iso: str, limit: int = 10) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM scheduled_tasks
+                WHERE enabled = 1 AND next_run_at <= ?
+                ORDER BY next_run_at ASC, id ASC
+                LIMIT ?
+                """,
+                (now_iso, int(limit)),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def complete_scheduled_task(
+        self,
+        task_id: int,
+        *,
+        next_run_at: str | None,
+        last_result: str,
+        enabled: bool,
+    ) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE scheduled_tasks
+                SET next_run_at = ?, enabled = ?, run_count = run_count + 1,
+                    last_run_at = ?, last_result = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_run_at or "",
+                    1 if enabled else 0,
+                    utc_now(),
+                    (last_result or "")[:2000],
+                    utc_now(),
+                    int(task_id),
+                ),
+            )
 
     def recent_chat_events(self, chat_id: str, *, limit: int = 50, days: int | None = 1) -> list[dict[str, Any]]:
         params: list[Any] = [chat_id]
