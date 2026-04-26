@@ -72,7 +72,7 @@ class MarketIndicators:
 
 class YahooQuoteTool:
     def fetch_quote(self, symbol: str) -> MarketQuote:
-        payload = self._fetch_chart(symbol, interval="1d", range_window="5d")
+        payload = self._fetch_chart(symbol, interval="1d", range_window="1mo")
         meta = payload["meta"]
         price = _to_float(meta.get("regularMarketPrice"))
         previous = _to_float(meta.get("chartPreviousClose"))
