@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -275,3 +275,38 @@ class Database:
     def clear_token_usage(self, chat_id: str) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM token_usage_daily WHERE chat_id = ?", (chat_id,))
+
+    def recent_chat_events(self, chat_id: str, *, limit: int = 50, days: int | None = 1) -> list[dict[str, Any]]:
+        params: list[Any] = [chat_id]
+        where = "WHERE chat_id = ?"
+        if days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max(days, 0))).isoformat(timespec="seconds")
+            where += " AND created_at >= ?"
+            params.append(cutoff)
+        params.append(limit)
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT created_at, event_type, display_name, user_id, raw_content
+                FROM chat_events
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def recent_messages(self, chat_id: str, *, limit: int = 120) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, role, content, kind, created_at
+                FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (chat_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
