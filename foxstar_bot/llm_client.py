@@ -38,6 +38,8 @@ OPENROUTER_TIMEOUT = 55.0
 
 LOG = logging.getLogger(__name__)
 
+TOOL_TRACE_LOG = logging.getLogger("foxstar_bot.tool_trace")
+
 TERMINAL_REJECT_TOOL_NAME = "_drop_reply_internal"
 
 TOOL_NAME_ALIASES = {
@@ -650,6 +652,15 @@ class LLMClient:
                         call.call_id,
                         _compact_json(call.arguments),
                     )
+                    _tool_trace(
+                        phase="input",
+                        api="responses",
+                        model=model_name,
+                        round_index=round_index + 1,
+                        tool_name=call.name,
+                        call_id=call.call_id,
+                        payload=call.arguments,
+                    )
                     handler = tool_handlers.get(call.name)
                     args: dict[str, Any] = {}
                     if handler is None:
@@ -672,6 +683,15 @@ class LLMClient:
                         call.name,
                         call.call_id,
                         _compact_json(result),
+                    )
+                    _tool_trace(
+                        phase="output",
+                        api="responses",
+                        model=model_name,
+                        round_index=round_index + 1,
+                        tool_name=call.name,
+                        call_id=call.call_id,
+                        payload=result,
                     )
                     if isinstance(result, dict) and result.get("__terminal_response__"):
                         return str(result.get("text", "")).strip()
@@ -1146,6 +1166,15 @@ class LLMClient:
                     call.id,
                     _compact_json(call.function.arguments),
                 )
+                _tool_trace(
+                    phase="input",
+                    api="openrouter",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=call.function.arguments,
+                )
                 handler = tool_handlers.get(call.function.name)
                 args: dict[str, Any] = {}
                 if handler is None:
@@ -1168,6 +1197,15 @@ class LLMClient:
                     call.function.name,
                     call.id,
                     _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="openrouter",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=result,
                 )
                 if isinstance(result, dict) and result.get("__terminal_response__"):
                     return str(result.get("text", "")).strip()
@@ -1283,6 +1321,15 @@ class LLMClient:
                     call.id,
                     _compact_json(call.function.arguments),
                 )
+                _tool_trace(
+                    phase="input",
+                    api="deepseek",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=call.function.arguments,
+                )
                 handler = tool_handlers.get(call.function.name)
                 args: dict[str, Any] = {}
                 if handler is None:
@@ -1305,6 +1352,15 @@ class LLMClient:
                     call.function.name,
                     call.id,
                     _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="deepseek",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=result,
                 )
                 if isinstance(result, dict) and result.get("__terminal_response__"):
                     return str(result.get("text", "")).strip()
@@ -1496,6 +1552,15 @@ class LLMClient:
                     call.id,
                     _compact_json(call.function.arguments),
                 )
+                _tool_trace(
+                    phase="input",
+                    api="fireworks",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=call.function.arguments,
+                )
                 handler = tool_handlers.get(call.function.name)
                 if handler is None:
                     result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
@@ -1512,6 +1577,15 @@ class LLMClient:
                     call.function.name,
                     call.id,
                     _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="fireworks",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=result,
                 )
                 if isinstance(result, dict) and result.get("__terminal_response__"):
                     return str(result.get("text", "")).strip()
@@ -1618,6 +1692,15 @@ class LLMClient:
                     call.id,
                     _compact_json(call.function.arguments),
                 )
+                _tool_trace(
+                    phase="input",
+                    api="sambanova",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=call.function.arguments,
+                )
                 handler = tool_handlers.get(call.function.name)
                 if handler is None:
                     result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
@@ -1634,6 +1717,15 @@ class LLMClient:
                     call.function.name,
                     call.id,
                     _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="sambanova",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=result,
                 )
                 if isinstance(result, dict) and result.get("__terminal_response__"):
                     return str(result.get("text", "")).strip()
@@ -1857,6 +1949,31 @@ def _compact_json(value: Any, limit: int = 900) -> str:
     if len(text) > limit:
         return text[:limit].rstrip() + "..."
     return text
+
+def _tool_trace(
+    *,
+    phase: str,
+    api: str,
+    model: str,
+    round_index: int,
+    tool_name: str,
+    call_id: str,
+    payload: Any,
+) -> None:
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "phase": phase,
+        "api": api,
+        "model": model,
+        "round": round_index,
+        "tool_name": tool_name,
+        "call_id": call_id,
+        "payload": payload,
+    }
+    try:
+        TOOL_TRACE_LOG.info(json.dumps(record, ensure_ascii=False, default=str))
+    except Exception:
+        TOOL_TRACE_LOG.info(str(record))
 
 def _render_tool_outputs(input_items: list[Any], limit: int = 3500) -> str:
     outputs: list[str] = []
