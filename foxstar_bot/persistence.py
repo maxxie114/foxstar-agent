@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import Any, Iterator
 
+import sqlite3
+
+from contextlib import contextmanager
+
+from datetime import datetime, timedelta, timezone
+
+from pathlib import Path
+
+from typing import Any, Iterator
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -117,6 +120,15 @@ class Database:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_events_chat_time ON chat_events(chat_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS group_member_snapshots (
+                    chat_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    display_name TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(chat_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_group_member_snapshots_chat ON group_member_snapshots(chat_id);
 
                 CREATE TABLE IF NOT EXISTS group_aliases (
                     chat_id TEXT PRIMARY KEY,
@@ -310,3 +322,28 @@ class Database:
                 (chat_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def has_recent_chat_event(
+        self,
+        chat_id: str,
+        event_type: str,
+        *,
+        user_id: str = "",
+        display_name: str = "",
+        within_seconds: int = 900,
+    ) -> bool:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=max(within_seconds, 0))).isoformat(timespec="seconds")
+        clauses = ["chat_id = ?", "event_type = ?", "created_at >= ?"]
+        params: list[Any] = [chat_id, event_type, cutoff]
+        if user_id:
+            clauses.append("user_id = ?")
+            params.append(user_id)
+        elif display_name:
+            clauses.append("display_name = ?")
+            params.append(display_name)
+        with self.connect() as conn:
+            row = conn.execute(
+                f"SELECT 1 FROM chat_events WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT 1",
+                tuple(params),
+            ).fetchone()
+        return row is not None
