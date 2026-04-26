@@ -14,6 +14,19 @@ class ContextStore:
         rows = list(reversed(rows))
         return [dict(row) for row in rows]
 
+    def render_recent(self, chat_id: str, limit: int = 8) -> list[str]:
+        items = self.recent_messages(chat_id)
+        if limit > 0:
+            items = items[-limit:]
+        rendered: list[str] = []
+        for item in items:
+            role = "bot" if item.get("role") == "assistant" else public_participant_label(str(item.get("user_id") or "user"))
+            content = _compact_content(redact_private_ids(str(item.get("content") or "")), limit=180)
+            if not content:
+                continue
+            rendered.append(f"{role}: {content}")
+        return rendered
+
     @staticmethod
     def _trim(content: str, limit: int = 2000) -> str:
         content = (content or "").strip()
