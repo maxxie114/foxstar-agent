@@ -2158,17 +2158,23 @@ def _message_reasoning_content(message: Any) -> Any:
     direct = getattr(message, "reasoning_content", None)
     if direct:
         return direct
+    direct_reasoning = getattr(message, "reasoning", None)
+    if direct_reasoning:
+        return direct_reasoning
     if isinstance(message, dict):
-        return message.get("reasoning_content")
+        return message.get("reasoning_content") or message.get("reasoning")
     model_extra = getattr(message, "model_extra", None)
-    if isinstance(model_extra, dict) and model_extra.get("reasoning_content"):
-        return model_extra.get("reasoning_content")
+    if isinstance(model_extra, dict):
+        if model_extra.get("reasoning_content"):
+            return model_extra.get("reasoning_content")
+        if model_extra.get("reasoning"):
+            return model_extra.get("reasoning")
     try:
         dumped = message.model_dump()
     except Exception:
         dumped = None
     if isinstance(dumped, dict):
-        return dumped.get("reasoning_content")
+        return dumped.get("reasoning_content") or dumped.get("reasoning")
     return None
 
 def _reply_gate_json_schema() -> dict[str, Any]:

@@ -99,6 +99,77 @@ def _parse_reply_gate_decision(output: str) -> dict[str, object]:
         "risk": str(data.get("risk") or "")[:300],
     }
 
+def _auto_web_search_plan_schema() -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "auto_web_search_plan",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "decision": {"type": "string", "enum": ["SEARCH", "SKIP"]},
+                    "confidence": {"type": "number"},
+                    "reason": {"type": "string"},
+                    "query": {"type": "string"},
+                    "signals": {"type": "array", "items": {"type": "string"}},
+                    "risk": {"type": "string"},
+                },
+                "required": ["decision", "confidence", "reason", "query", "signals", "risk"],
+                "additionalProperties": False,
+            },
+            "strict": True,
+        },
+    }
+
+def _parse_auto_web_search_plan(output: str, *, fallback_query: str) -> dict[str, object]:
+    text = (output or "").strip()
+    data: dict[str, object] | None = None
+    if text:
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, dict):
+                data = loaded
+        except json.JSONDecodeError:
+            match = re.search(r"\{[\s\S]*\}", text)
+            if match:
+                try:
+                    loaded = json.loads(match.group(0))
+                    if isinstance(loaded, dict):
+                        data = loaded
+                except json.JSONDecodeError:
+                    data = None
+    if data is None:
+        return {
+            "should_search": False,
+            "query": "",
+            "reason": "invalid_json",
+            "confidence": 0.0,
+            "signals": [],
+            "risk": "invalid_json",
+        }
+    decision = str(data.get("decision") or "").strip().upper()
+    if decision not in {"SEARCH", "SKIP"}:
+        decision = "SKIP"
+    try:
+        confidence = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(confidence, 1.0))
+    query = str(data.get("query") or "").strip()
+    if decision == "SEARCH" and not query:
+        query = fallback_query
+    signals = data.get("signals", [])
+    if not isinstance(signals, list):
+        signals = [str(signals)]
+    return {
+        "should_search": decision == "SEARCH",
+        "query": query,
+        "reason": str(data.get("reason") or "")[:500],
+        "confidence": confidence,
+        "signals": [str(item)[:200] for item in signals[:8]],
+        "risk": str(data.get("risk") or "")[:300],
+    }
+
 def _looks_like_tool_leak(text: str) -> bool:
     value = (text or "").strip()
     if not value:
