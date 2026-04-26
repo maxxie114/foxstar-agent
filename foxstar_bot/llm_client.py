@@ -188,6 +188,7 @@ class LLMClient:
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 usage_context=usage_context,
             )
@@ -532,6 +533,7 @@ class LLMClient:
                 tool_handlers,
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
                 usage_context=usage_context,
             )
@@ -897,6 +899,7 @@ class LLMClient:
         *,
         max_tokens: int,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
         timeout: float | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
@@ -908,6 +911,7 @@ class LLMClient:
                 model_name=model_name,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                extra_create_kwargs=_together_reasoning_kwargs(reasoning_effort or self.config.reasoning_effort),
                 timeout=timeout,
                 usage_context=usage_context,
             )
@@ -964,6 +968,7 @@ class LLMClient:
         temperature: float | None = None,
         timeout: float | None = None,
         use_content_parts: bool = False,
+        extra_create_kwargs: dict[str, Any] | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if client is None:
@@ -977,6 +982,8 @@ class LLMClient:
         }
         if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
+        if extra_create_kwargs:
+            kwargs.update(extra_create_kwargs)
         response = _call_with_hard_timeout(
             f"{provider_name}.chat.completions",
             api_timeout + 2.0,
@@ -1398,6 +1405,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
+        reasoning_effort: str | None = None,
         max_tool_rounds: int = 4,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
@@ -1410,6 +1418,7 @@ class LLMClient:
                 tool_handlers=tool_handlers,
                 model_name=model_name,
                 max_tokens=max_tokens,
+                extra_create_kwargs=_together_reasoning_kwargs(reasoning_effort or self.config.reasoning_effort),
                 max_tool_rounds=max_tool_rounds,
                 usage_context=usage_context,
             )
@@ -2046,7 +2055,7 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
             for call in list(getattr(message, "tool_calls", None) or [])
         ],
     }
-    reasoning_content = getattr(message, "reasoning_content", None)
+    reasoning_content = _message_reasoning_content(message)
     if reasoning_content:
         payload["reasoning_content"] = reasoning_content
     return payload
@@ -2111,12 +2120,21 @@ def _deepseek_thinking_enabled(value: str | None) -> bool:
 def _deepseek_extra_body(reasoning_effort: str | None) -> dict[str, Any]:
     return {"thinking": {"type": "enabled" if _deepseek_thinking_enabled(reasoning_effort) else "disabled"}}
 
+def _together_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
+    effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
+    if not effort or effort in {"none", "off", "false", "0"}:
+        return {}
+    return {
+        "reasoning_effort": effort,
+        "reasoning": {"enabled": True},
+    }
+
 def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "role": "assistant",
         "content": getattr(message, "content", "") or "",
     }
-    reasoning_content = getattr(message, "reasoning_content", None)
+    reasoning_content = _message_reasoning_content(message)
     if reasoning_content:
         payload["reasoning_content"] = reasoning_content
     tool_calls = list(getattr(message, "tool_calls", None) or [])
@@ -2133,6 +2151,23 @@ def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
             for call in tool_calls
         ]
     return payload
+
+def _message_reasoning_content(message: Any) -> Any:
+    direct = getattr(message, "reasoning_content", None)
+    if direct:
+        return direct
+    if isinstance(message, dict):
+        return message.get("reasoning_content")
+    model_extra = getattr(message, "model_extra", None)
+    if isinstance(model_extra, dict) and model_extra.get("reasoning_content"):
+        return model_extra.get("reasoning_content")
+    try:
+        dumped = message.model_dump()
+    except Exception:
+        dumped = None
+    if isinstance(dumped, dict):
+        return dumped.get("reasoning_content")
+    return None
 
 def _reply_gate_json_schema() -> dict[str, Any]:
     return {

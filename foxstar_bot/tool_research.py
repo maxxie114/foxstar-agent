@@ -159,7 +159,9 @@ class WebResearchAgent:
             "5. When enough evidence is gathered, call finish_research.\n"
             "6. If any tool returns must_finish=true or a budget error, immediately call finish_research with the evidence already gathered.\n\n"
             "Report requirements: Chinese unless the query asks otherwise; compact; separate facts from uncertainty; "
-            "mention conflicts between sources; include source names/URLs in the report."
+            "mention conflicts between sources; include source names/URLs in the report. "
+            "If the request asks for latest/current/today/realtime information, explicitly verify recency, prefer the most recent authoritative source available, "
+            "and say when a source may be stale or unverified."
         )
         answer = self.llm.chat_with_tools(
             [
@@ -289,7 +291,9 @@ class WebResearchAgent:
             "Do not write a long article. No Markdown headings. "
             "Limit the answer to 6 short bullet lines plus uncertainty notes. "
             "If sources are irrelevant or weak, say so clearly. "
-            "Keep price/time-sensitive claims tied to the source timestamp when available.\n\n"
+            "Keep price/time-sensitive claims tied to the source timestamp when available. "
+            "Prioritize official, primary, or otherwise authoritative sources over secondary summaries. "
+            "If the query asks for latest/current/today/realtime facts, explicitly say whether the fetched evidence looks current enough, and highlight any staleness risk.\n\n"
             f"Original query: {original_query}\n"
             f"Queries searched: {searched}\n\n"
             f"Fetched pages:\n{page_notes}"
@@ -331,7 +335,8 @@ def _research_input(query: str, original_query: str) -> str:
         f"{query}\n\n"
         "Research instruction:\n"
         "Use the original request as authoritative. Preserve exact dates, named sources, outlets, amounts, entities, and requested information sources. "
-        "Rewrite/search in both Chinese and English when useful. Do not treat the model-proposed query as complete if it dropped constraints."
+        "Rewrite/search in both Chinese and English when useful. Do not treat the model-proposed query as complete if it dropped constraints. "
+        "When the user asks for latest/current/today/realtime information, verify freshness explicitly, prefer authoritative primary sources, and say if evidence may be stale."
     )
 
 def _strip_json_fence(text: str) -> str:
