@@ -429,14 +429,17 @@ class Database:
                 ),
             )
 
-    def recent_chat_events(self, chat_id: str, *, limit: int = 50, days: int | None = 1) -> list[dict[str, Any]]:
+    def recent_chat_events(self, chat_id: str, *, limit: int | None = 50, days: int | None = 1) -> list[dict[str, Any]]:
         params: list[Any] = [chat_id]
         where = "WHERE chat_id = ?"
         if days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=max(days, 0))).isoformat(timespec="seconds")
             where += " AND created_at >= ?"
             params.append(cutoff)
-        params.append(limit)
+        limit_sql = ""
+        if limit is not None:
+            params.append(int(limit))
+            limit_sql = "LIMIT ?"
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
@@ -444,7 +447,7 @@ class Database:
                 FROM chat_events
                 {where}
                 ORDER BY id DESC
-                LIMIT ?
+                {limit_sql}
                 """,
                 tuple(params),
             ).fetchall()
