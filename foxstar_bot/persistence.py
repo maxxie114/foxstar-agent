@@ -171,6 +171,24 @@ class Database:
                     updated_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_due ON scheduled_tasks(enabled, next_run_at);
+
+                CREATE TABLE IF NOT EXISTS accounting_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    entry_type TEXT NOT NULL,
+                    counterparty TEXT NOT NULL,
+                    amount REAL NOT NULL,
+                    currency TEXT NOT NULL DEFAULT 'CNY',
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    cleared_at TEXT,
+                    cleared_by TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_accounting_entries_chat_time ON accounting_entries(chat_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_accounting_entries_chat_type_status ON accounting_entries(chat_id, entry_type, status);
                 """
             )
             for statement in (
@@ -470,3 +488,146 @@ class Database:
                 tuple(params),
             ).fetchone()
         return row is not None
+
+    def add_accounting_entry(
+        self,
+        *,
+        chat_id: str,
+        created_by: str,
+        entry_type: str,
+        counterparty: str,
+        amount: float,
+        description: str,
+        currency: str = "CNY",
+        status: str = "open",
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO accounting_entries(
+                    chat_id, created_by, entry_type, counterparty, amount, currency,
+                    description, status, cleared_at, cleared_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                (
+                    chat_id,
+                    created_by,
+                    entry_type,
+                    counterparty,
+                    float(amount),
+                    currency,
+                    description,
+                    status,
+                    now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def clear_accounting_owe(
+        self,
+        *,
+        chat_id: str,
+        counterparty: str,
+        amount: float,
+        description: str,
+        cleared_by: str,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM accounting_entries
+                WHERE chat_id = ? AND entry_type = 'owe' AND status = 'open'
+                  AND counterparty = ? AND amount = ? AND description = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (chat_id, counterparty, float(amount), description),
+            ).fetchone()
+            if row is None:
+                return 0
+            cursor = conn.execute(
+                """
+                UPDATE accounting_entries
+                SET status = 'cleared', cleared_at = ?, cleared_by = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (now, cleared_by, now, int(row["id"])),
+            )
+            return int(cursor.rowcount or 0)
+
+    def lookup_accounting(
+        self,
+        chat_id: str,
+        *,
+        entry_type: str | None = None,
+        days: int | None = 30,
+        status: str | None = None,
+        counterparty: str = "",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        clauses = ["chat_id = ?"]
+        params: list[Any] = [chat_id]
+        if entry_type and entry_type != "all":
+            clauses.append("entry_type = ?")
+            params.append(entry_type)
+        if status and status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+        if counterparty.strip():
+            clauses.append("counterparty = ?")
+            params.append(counterparty.strip())
+        if days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max(days, 0))).isoformat(timespec="seconds")
+            clauses.append("created_at >= ?")
+            params.append(cutoff)
+        params.append(int(limit))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, entry_type, counterparty, amount, currency, description, status,
+                       cleared_at, cleared_by, created_by, created_at, updated_at
+                FROM accounting_entries
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def summarize_accounting(
+        self,
+        chat_id: str,
+        *,
+        entry_type: str | None = None,
+        days: int | None = 30,
+        status: str | None = None,
+        counterparty: str = "",
+    ) -> dict[str, Any]:
+        rows = self.lookup_accounting(
+            chat_id,
+            entry_type=entry_type,
+            days=days,
+            status=status,
+            counterparty=counterparty,
+            limit=1000,
+        )
+        total_amount = sum(float(row.get("amount") or 0.0) for row in rows)
+        by_counterparty: dict[str, float] = {}
+        for row in rows:
+            name = str(row.get("counterparty") or "").strip() or "(unknown)"
+            by_counterparty[name] = by_counterparty.get(name, 0.0) + float(row.get("amount") or 0.0)
+        return {
+            "count": len(rows),
+            "total_amount": total_amount,
+            "by_counterparty": [
+                {"counterparty": name, "amount": amount}
+                for name, amount in sorted(by_counterparty.items(), key=lambda item: (-item[1], item[0]))
+            ],
+            "rows": rows,
+        }
