@@ -1,16 +1,42 @@
 from __future__ import annotations
 
 import json
-
 import math
-
 import urllib.parse
-
 import urllib.request
-
 from dataclasses import dataclass
 
+
 YAHOO_CHART_ENDPOINT = "https://query1.finance.yahoo.com/v8/finance/chart/"
+SUPPORTED_INTERVALS = {
+    "1m",
+    "2m",
+    "5m",
+    "15m",
+    "30m",
+    "60m",
+    "90m",
+    "1h",
+    "1d",
+    "5d",
+    "1wk",
+    "1mo",
+    "3mo",
+}
+SUPPORTED_RANGES = {
+    "1d",
+    "5d",
+    "1mo",
+    "3mo",
+    "6mo",
+    "1y",
+    "2y",
+    "5y",
+    "10y",
+    "ytd",
+    "max",
+}
+
 
 @dataclass(frozen=True)
 class MarketQuote:
@@ -23,6 +49,7 @@ class MarketQuote:
     chart_previous_close: float | None
     price_change: float | None
     price_change_percent: float | None
+
 
 @dataclass(frozen=True)
 class MarketIndicators:
@@ -69,6 +96,7 @@ class MarketIndicators:
     obv: float | None
     distance_to_sma_50_percent: float | None
     distance_to_sma_200_percent: float | None
+
 
 class YahooQuoteTool:
     def fetch_quote(self, symbol: str) -> MarketQuote:
@@ -183,6 +211,47 @@ class YahooQuoteTool:
             distance_to_sma_200_percent=_distance_percent(latest_close, sma_200),
         )
 
+    def _fetch_chart(self, symbol: str, *, interval: str, range_window: str) -> dict[str, object]:
+        ticker = str(symbol or "").strip().upper()
+        if not ticker:
+            raise ValueError("symbol is required")
+        interval = _normalize_interval(interval)
+        range_window = str(range_window or "").strip().lower()
+        if interval not in SUPPORTED_INTERVALS:
+            raise ValueError("interval must be one of: 1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo")
+        if range_window not in SUPPORTED_RANGES:
+            raise ValueError("range must be one of: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max")
+        url = (
+            f"{YAHOO_CHART_ENDPOINT}{urllib.parse.quote(ticker)}"
+            f"?interval={urllib.parse.quote(interval)}&range={urllib.parse.quote(range_window)}"
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+            },
+        )
+        with opener.open(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        result = payload.get("chart", {}).get("result", [])
+        if not result:
+            error = payload.get("chart", {}).get("error") or {}
+            raise RuntimeError(error.get("description") or "no chart result returned")
+        chart = result[0]
+        meta = chart.get("meta", {})
+        quote = chart.get("indicators", {}).get("quote", [{}])[0]
+        return {
+            "meta": meta,
+            "open_prices": [_to_float(value) for value in quote.get("open", [])],
+            "high_prices": [_to_float(value) for value in quote.get("high", [])],
+            "low_prices": [_to_float(value) for value in quote.get("low", [])],
+            "close_prices": [_to_float(value) for value in quote.get("close", [])],
+            "volume_values": [_to_float(value) for value in quote.get("volume", [])],
+        }
+
+
 def _to_float(value: object) -> float | None:
     if value is None:
         return None
@@ -191,8 +260,17 @@ def _to_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
 
+
+def _normalize_interval(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized == "1h":
+        return "60m"
+    return normalized
+
+
 def _count_non_none(values: list[float | None]) -> int:
     return sum(1 for value in values if value is not None)
+
 
 def _last_non_none(values: list[float | None]) -> float | None:
     for value in reversed(values):
@@ -200,11 +278,13 @@ def _last_non_none(values: list[float | None]) -> float | None:
             return value
     return None
 
+
 def _sma(values: list[float | None], period: int) -> float | None:
     window = _last_window(values, period)
     if window is None:
         return None
     return sum(window) / period
+
 
 def _ema_series(values: list[float | None], period: int) -> list[float | None]:
     result: list[float | None] = []
@@ -227,6 +307,7 @@ def _ema_series(values: list[float | None], period: int) -> list[float | None]:
         result.append(ema)
     return result
 
+
 def _rsi(values: list[float | None], period: int) -> float | None:
     closes = _compact(values)
     if len(closes) <= period:
@@ -247,6 +328,7 @@ def _rsi(values: list[float | None], period: int) -> float | None:
     rs = average_gain / average_loss
     return 100.0 - (100.0 / (1.0 + rs))
 
+
 def _bollinger_bands(values: list[float | None], period: int, stddev_multiplier: float) -> tuple[float | None, float | None, float | None]:
     window = _last_window(values, period)
     if window is None:
@@ -255,6 +337,7 @@ def _bollinger_bands(values: list[float | None], period: int, stddev_multiplier:
     variance = sum((value - mean) ** 2 for value in window) / period
     stddev = math.sqrt(variance)
     return mean, mean + (stddev_multiplier * stddev), mean - (stddev_multiplier * stddev)
+
 
 def _true_ranges(highs: list[float | None], lows: list[float | None], closes: list[float | None]) -> list[float]:
     result: list[float] = []
@@ -272,9 +355,11 @@ def _true_ranges(highs: list[float | None], lows: list[float | None], closes: li
             previous_close = close
     return result
 
+
 def _atr(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     true_ranges = _true_ranges(highs, lows, closes)
     return _wilder_average(true_ranges, period)
+
 
 def _stochastic_k(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     close = _last_non_none(closes)
@@ -291,6 +376,7 @@ def _stochastic_k(highs: list[float | None], lows: list[float | None], closes: l
         return 0.0
     return ((close - lowest) / span) * 100.0
 
+
 def _stochastic_d(highs: list[float | None], lows: list[float | None], closes: list[float | None], k_period: int, d_period: int) -> float | None:
     k_values: list[float] = []
     for index in range(len(closes)):
@@ -300,6 +386,7 @@ def _stochastic_d(highs: list[float | None], lows: list[float | None], closes: l
     if len(k_values) < d_period:
         return None
     return sum(k_values[-d_period:]) / d_period
+
 
 def _directional_movements(highs: list[float | None], lows: list[float | None]) -> tuple[list[float], list[float]]:
     plus_dm: list[float] = []
@@ -319,6 +406,7 @@ def _directional_movements(highs: list[float | None], lows: list[float | None]) 
         previous_low = low
     return plus_dm, minus_dm
 
+
 def _plus_di(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     plus_dm, _ = _directional_movements(highs, lows)
     atr = _atr(highs, lows, closes, period)
@@ -327,6 +415,7 @@ def _plus_di(highs: list[float | None], lows: list[float | None], closes: list[f
         return None
     return (plus_dm_avg / atr) * 100.0
 
+
 def _minus_di(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     _, minus_dm = _directional_movements(highs, lows)
     atr = _atr(highs, lows, closes, period)
@@ -334,6 +423,7 @@ def _minus_di(highs: list[float | None], lows: list[float | None], closes: list[
     if atr in (None, 0.0) or minus_dm_avg is None:
         return None
     return (minus_dm_avg / atr) * 100.0
+
 
 def _adx(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     plus_dm, minus_dm = _directional_movements(highs, lows)
@@ -356,6 +446,7 @@ def _adx(highs: list[float | None], lows: list[float | None], closes: list[float
             dx_values.append((abs(plus_di - minus_di) / denom) * 100.0)
     return _wilder_average(dx_values, period)
 
+
 def _cci(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     typical_prices: list[float] = []
     for high, low, close in zip(highs, lows, closes):
@@ -370,6 +461,7 @@ def _cci(highs: list[float | None], lows: list[float | None], closes: list[float
     if mean_deviation == 0:
         return 0.0
     return (window[-1] - sma) / (0.015 * mean_deviation)
+
 
 def _williams_r(highs: list[float | None], lows: list[float | None], closes: list[float | None], period: int) -> float | None:
     close = _last_non_none(closes)
@@ -386,6 +478,7 @@ def _williams_r(highs: list[float | None], lows: list[float | None], closes: lis
         return 0.0
     return ((highest - close) / span) * -100.0
 
+
 def _roc(values: list[float | None], period: int) -> float | None:
     compact = _compact(values)
     if len(compact) <= period:
@@ -396,11 +489,13 @@ def _roc(values: list[float | None], period: int) -> float | None:
         return None
     return ((current - previous) / previous) * 100.0
 
+
 def _momentum(values: list[float | None], period: int) -> float | None:
     compact = _compact(values)
     if len(compact) <= period:
         return None
     return compact[-1] - compact[-period - 1]
+
 
 def _obv(closes: list[float | None], volumes: list[float | None]) -> float | None:
     obv = 0.0
@@ -421,6 +516,7 @@ def _obv(closes: list[float | None], volumes: list[float | None]) -> float | Non
         used = True
     return obv if used else None
 
+
 def _vwap(
     opens: list[float | None],
     highs: list[float | None],
@@ -440,27 +536,33 @@ def _vwap(
         return None
     return numer / denom
 
+
 def _distance_percent(value: float | None, baseline: float | None) -> float | None:
     if value is None or baseline in (None, 0.0):
         return None
     return ((value - baseline) / baseline) * 100.0
 
+
 def _highest(values: list[float | None]) -> float | None:
     compact = _compact(values)
     return max(compact) if compact else None
+
 
 def _lowest(values: list[float | None]) -> float | None:
     compact = _compact(values)
     return min(compact) if compact else None
 
+
 def _compact(values: list[float | None]) -> list[float]:
     return [value for value in values if value is not None]
+
 
 def _last_window(values: list[float | None], period: int) -> list[float] | None:
     window = _compact(values[-period:])
     if len(window) != period:
         return None
     return window
+
 
 def _pairwise_diff(left: list[float | None], right: list[float | None]) -> list[float | None]:
     result: list[float | None] = []
@@ -471,9 +573,11 @@ def _pairwise_diff(left: list[float | None], right: list[float | None]) -> list[
             result.append(left_value - right_value)
     return result
 
+
 def _wilder_average(values: list[float], period: int) -> float | None:
     series = _wilder_average_series(values, period)
     return _last_non_none(series)
+
 
 def _wilder_average_series(values: list[float], period: int) -> list[float | None]:
     if len(values) < period:
