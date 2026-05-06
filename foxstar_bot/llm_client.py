@@ -1099,7 +1099,7 @@ class LLMClient:
             response=response,
             choice=choice,
         )
-        content = (choice.message.content or "").strip()
+        content = _sanitize_provider_content(choice.message.content or "")
         if not content:
             LOG.warning(
                 "%s chat returned empty content model=%s finish_reason=%s usage=%s",
@@ -1276,7 +1276,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = (message.content or "").strip()
+                content = _sanitize_provider_content(message.content or "")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1431,7 +1431,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = (message.content or "").strip()
+                content = _sanitize_provider_content(message.content or "")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1673,7 +1673,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = (message.content or "").strip()
+                content = _sanitize_provider_content(message.content or "")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1813,7 +1813,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = (message.content or "").strip()
+                content = _sanitize_provider_content(message.content or "")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
