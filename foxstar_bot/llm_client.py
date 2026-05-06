@@ -40,6 +40,8 @@ LOG = logging.getLogger(__name__)
 
 TOOL_TRACE_LOG = logging.getLogger("foxstar_bot.tool_trace")
 
+TESTING_MODE_LOG = logging.getLogger("foxstar_bot.testing_mode")
+
 TERMINAL_REJECT_TOOL_NAME = "_drop_reply_internal"
 
 TOOL_NAME_ALIASES = {
@@ -267,6 +269,16 @@ class LLMClient:
         _log_prompt_cache_usage("chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="chat.completions", model=model_name, provider="openai", usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api="chat.completions",
+            provider="openai",
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -874,6 +886,16 @@ class LLMClient:
         _log_prompt_cache_usage("openrouter.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="openrouter.chat.completions", model=model_name, provider="openrouter", usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api="openrouter.chat.completions",
+            provider="openrouter",
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -922,6 +944,16 @@ class LLMClient:
         _log_prompt_cache_usage("deepseek.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="deepseek.chat.completions", model=model_name, provider="deepseek", usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api="deepseek.chat.completions",
+            provider="deepseek",
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -1056,6 +1088,16 @@ class LLMClient:
         _log_prompt_cache_usage(f"{provider_name}.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api=f"{provider_name}.chat.completions", model=model_name, provider=provider_name, usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api=f"{provider_name}.chat.completions",
+            provider=provider_name,
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -1098,6 +1140,16 @@ class LLMClient:
         _log_prompt_cache_usage("fireworks.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="fireworks.chat.completions", model=model_name, provider="fireworks", usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api="fireworks.chat.completions",
+            provider="fireworks",
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -1138,6 +1190,16 @@ class LLMClient:
         _log_prompt_cache_usage("sambanova.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="sambanova.chat.completions", model=model_name, provider="sambanova", usage=getattr(response, "usage", None))
         choice = response.choices[0]
+        _testing_trace_response(
+            usage_context=usage_context,
+            api="sambanova.chat.completions",
+            provider="sambanova",
+            model=model_name,
+            request_messages=messages,
+            request_kwargs=kwargs,
+            response=response,
+            choice=choice,
+        )
         content = (choice.message.content or "").strip()
         if not content:
             LOG.warning(
@@ -2070,6 +2132,79 @@ def _tool_trace(
         TOOL_TRACE_LOG.info(json.dumps(record, ensure_ascii=False, default=str))
     except Exception:
         TOOL_TRACE_LOG.info(str(record))
+
+def _testing_trace_response(
+    *,
+    usage_context: dict[str, Any] | None,
+    api: str,
+    provider: str,
+    model: str,
+    request_messages: list[dict[str, Any]],
+    request_kwargs: dict[str, Any],
+    response: Any,
+    choice: Any,
+) -> None:
+    if not _is_testing_usage_context(usage_context):
+        return
+    message = getattr(choice, "message", None)
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": "response",
+        "feature": str((usage_context or {}).get("feature") or ""),
+        "chat_id": str((usage_context or {}).get("chat_id") or ""),
+        "sender": str((usage_context or {}).get("sender") or ""),
+        "msg_type": (usage_context or {}).get("msg_type"),
+        "provider": provider,
+        "api": api,
+        "model": model,
+        "original_text": str((usage_context or {}).get("original_text") or ""),
+        "sanitized_text": str((usage_context or {}).get("sanitized_text") or ""),
+        "request_messages": request_messages,
+        "request_kwargs": _testing_trace_sanitize_request_kwargs(request_kwargs),
+        "response_id": getattr(response, "id", None),
+        "finish_reason": getattr(choice, "finish_reason", None),
+        "content": getattr(message, "content", "") if message is not None else "",
+        "reasoning_content": _message_reasoning_content(message) if message is not None else None,
+        "usage": _safe_model_dump(getattr(response, "usage", None)),
+        "raw_message": _safe_model_dump(message),
+    }
+    try:
+        TESTING_MODE_LOG.info(json.dumps(record, ensure_ascii=False, default=str))
+    except Exception:
+        TESTING_MODE_LOG.info(str(record))
+
+def _is_testing_usage_context(usage_context: dict[str, Any] | None) -> bool:
+    return str((usage_context or {}).get("feature") or "").strip().lower() == "main_reply_testing_mode"
+
+def _testing_trace_sanitize_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    safe: dict[str, Any] = {}
+    for key, value in kwargs.items():
+        if key == "messages":
+            continue
+        if key == "timeout":
+            safe[key] = value
+            continue
+        safe[key] = _safe_model_dump(value)
+    return safe
+
+def _safe_model_dump(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _safe_model_dump(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_safe_model_dump(v) for v in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump()
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        try:
+            return {str(k): _safe_model_dump(v) for k, v in vars(value).items() if not str(k).startswith("_")}
+        except Exception:
+            pass
+    return str(value)
 
 def _render_tool_outputs(input_items: list[Any], limit: int = 3500) -> str:
     outputs: list[str] = []
