@@ -2505,6 +2505,20 @@ def _candidate_json_payloads(text: str) -> list[str]:
         payloads.append(match.group(1))
     return payloads
 
+def _sanitize_provider_content(content: str) -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    cleaned = re.sub(
+        r"<[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>[\s\S]*?</[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    if cleaned != text:
+        LOG.warning("provider_tool_markup_stripped content_preview=%r", text[:300])
+    return cleaned
+
 def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
     try:
         data = json.loads(payload)
