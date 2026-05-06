@@ -25,6 +25,8 @@ class ToolConfig:
     openai_web_search_model: str = "gpt-5"
     openai_web_search_reasoning_effort: str = "low"
     openai_web_search_max_output_tokens: int = 6000
+    openrouter_web_search_model: str = "perplexity/sonar-pro-search"
+    openrouter_web_search_max_output_tokens: int = 3000
     preferred_search_provider: str = "exa"
     exa_search_type: str = "auto"
     code_execution_enabled: bool = False

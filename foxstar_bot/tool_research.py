@@ -56,6 +56,35 @@ class WebResearchAgent:
         )
         return f"OpenAI web_search subagent result:\n{result}"
 
+    def _openrouter_sonar_search(self, query: str, *, run_id: str, chat_id: str = "") -> str:
+        model = self.search.config.tools.openrouter_web_search_model or "perplexity/sonar-pro-search"
+        max_tokens = self.search.config.tools.openrouter_web_search_max_output_tokens or 3000
+        prompt = (
+            "你是一个快速 web research 子代理。"
+            "直接使用联网搜索能力，产出一份简洁、可靠、带来源的中文 research brief。"
+            "优先最新、权威、原始来源。"
+            "如果用户要求 today/latest/current/realtime，一定显式核实时间新鲜度。"
+            "如果来源冲突，明确写冲突点，不要硬下结论。"
+            "输出尽量短，方便传回主模型继续整合。"
+            f"\n\nResearch request:\n{query}"
+        )
+        LOG.info(
+            "web_research openrouter_sonar run=%s model=%s max_output_tokens=%s",
+            run_id,
+            model,
+            max_tokens,
+        )
+        result = self.llm.chat(
+            [{"role": "user", "content": prompt}],
+            max_completion_tokens=max_tokens,
+            model=model,
+            provider="openrouter",
+            reasoning_effort="none",
+            timeout=90.0,
+            usage_context={"chat_id": chat_id, "feature": "web_research"},
+        )
+        return f"OpenRouter Sonar search result:\n{result}"
+
     def _agentic_research(self, query: str, *, max_rounds: int, max_pages: int, run_id: str, chat_id: str = "") -> str:
         searched: list[str] = []
         fetched: list[ResearchPage] = []
