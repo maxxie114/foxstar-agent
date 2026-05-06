@@ -1099,7 +1099,7 @@ class LLMClient:
             response=response,
             choice=choice,
         )
-        content = _sanitize_provider_content(choice.message.content or "")
+        content = _sanitize_provider_content(choice.message.content or "", provider_name=provider_name)
         if not content:
             LOG.warning(
                 "%s chat returned empty content model=%s finish_reason=%s usage=%s",
@@ -1276,7 +1276,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = _sanitize_provider_content(message.content or "")
+                content = _sanitize_provider_content(message.content or "", provider_name="openrouter")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1431,7 +1431,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = _sanitize_provider_content(message.content or "")
+                content = _sanitize_provider_content(message.content or "", provider_name="deepseek")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1673,7 +1673,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = _sanitize_provider_content(message.content or "")
+                content = _sanitize_provider_content(message.content or "", provider_name="fireworks")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -1813,7 +1813,7 @@ class LLMClient:
             message = response.choices[0].message
             tool_calls = list(getattr(message, "tool_calls", None) or [])
             if not tool_calls:
-                content = _sanitize_provider_content(message.content or "")
+                content = _sanitize_provider_content(message.content or "", provider_name="sambanova")
                 pseudo_result = _handle_plaintext_tool_call(content, tool_handlers)
                 if pseudo_result is not None:
                     LOG.warning(
@@ -2504,20 +2504,6 @@ def _candidate_json_payloads(text: str) -> list[str]:
     if match and match.group(1) != text:
         payloads.append(match.group(1))
     return payloads
-
-def _sanitize_provider_content(content: str) -> str:
-    text = (content or "").strip()
-    if not text:
-        return ""
-    cleaned = re.sub(
-        r"<[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>[\s\S]*?</[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    ).strip()
-    if cleaned != text:
-        LOG.warning("provider_tool_markup_stripped content_preview=%r", text[:300])
-    return cleaned
 
 def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
     try:
