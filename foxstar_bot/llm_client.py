@@ -1048,6 +1048,7 @@ class LLMClient:
             temperature=temperature,
             timeout=timeout,
             max_tokens_field="max_completion_tokens",
+            extra_create_kwargs={"extra_body": {"reasoning_split": True}},
             usage_context=usage_context,
         )
 
@@ -1613,6 +1614,7 @@ class LLMClient:
             max_tokens=max_tokens,
             max_tool_rounds=max_tool_rounds,
             max_tokens_field="max_completion_tokens",
+            extra_create_kwargs={"extra_body": {"reasoning_split": True}},
             usage_context=usage_context,
         )
 
