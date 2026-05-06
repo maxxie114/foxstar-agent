@@ -64,6 +64,7 @@ class LLMClient:
         deepseek_api_key: str = "",
         together_api_key: str = "",
         lightning_api_key: str = "",
+        minimax_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
         usage_recorder: Any | None = None,
@@ -119,6 +120,16 @@ class LLMClient:
                 max_retries=0,
             )
             if lightning_api_key
+            else None
+        )
+        self.minimax_client = (
+            OpenAI(
+                api_key=minimax_api_key,
+                base_url="https://api.minimax.io/v1",
+                timeout=timeout,
+                max_retries=0,
+            )
+            if minimax_api_key
             else None
         )
         self.sambanova_client = (
@@ -194,6 +205,15 @@ class LLMClient:
             )
         if resolved_provider == "lightning":
             return self._lightning_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        if resolved_provider == "minimax":
+            return self._minimax_chat(
                 messages,
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
@@ -314,6 +334,16 @@ class LLMClient:
                 temperature=temperature,
                 timeout=timeout,
                 provider="lightning",
+                usage_context=usage_context,
+            )
+        if resolved_provider == "minimax":
+            return self.chat(
+                messages,
+                max_completion_tokens=max_output_tokens,
+                model=model_name,
+                temperature=temperature,
+                timeout=timeout,
+                provider="minimax",
                 usage_context=usage_context,
             )
         if resolved_provider == "fireworks":
@@ -539,6 +569,16 @@ class LLMClient:
             )
         if resolved_provider == "lightning":
             return self._lightning_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        if resolved_provider == "minimax":
+            return self._minimax_chat_with_tools(
                 messages,
                 tools,
                 tool_handlers,
@@ -957,6 +997,28 @@ class LLMClient:
             usage_context=usage_context,
         )
 
+    def _minimax_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        return self._compatible_chat(
+            client=self.minimax_client,
+            provider_name="minimax",
+            messages=messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens_field="max_completion_tokens",
+            usage_context=usage_context,
+        )
+
     def _compatible_chat(
         self,
         *,
@@ -968,6 +1030,7 @@ class LLMClient:
         temperature: float | None = None,
         timeout: float | None = None,
         use_content_parts: bool = False,
+        max_tokens_field: str = "max_tokens",
         extra_create_kwargs: dict[str, Any] | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
@@ -977,9 +1040,9 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": model_name,
             "messages": _chat_messages_for_provider(messages, use_content_parts=use_content_parts),
-            "max_tokens": max_tokens,
             "timeout": api_timeout,
         }
+        kwargs[max_tokens_field] = max_tokens
         if temperature is not None and _model_supports_temperature(model_name):
             kwargs["temperature"] = temperature
         if extra_create_kwargs:
@@ -1464,6 +1527,30 @@ class LLMClient:
             max_tokens=max_tokens,
             max_tool_rounds=max_tool_rounds,
             use_content_parts=True,
+            usage_context=usage_context,
+        )
+
+    def _minimax_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        return self._compatible_chat_with_tools(
+            client=self.minimax_client,
+            provider_name="minimax",
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            max_tool_rounds=max_tool_rounds,
+            max_tokens_field="max_completion_tokens",
             usage_context=usage_context,
         )
 
@@ -2062,11 +2149,13 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "fireworks", "sambanova"}:
+    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "fireworks", "sambanova"}:
         return value
     model_name = (model or "").strip().lower()
     if model_name.startswith("deepseek-"):
         return "deepseek"
+    if model_name.startswith("minimax-"):
+        return "minimax"
     if model_name.startswith("accounts/fireworks/"):
         return "fireworks"
     if "/" in model_name:

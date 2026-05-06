@@ -108,6 +108,7 @@ class AppConfig:
     deepseek_api_key: str = ""
     together_api_key: str = ""
     lightning_api_key: str = ""
+    minimax_api_key: str = ""
     sambanova_api_key: str = ""
     fireworks_api_key: str = ""
     log_level: str = "INFO"
