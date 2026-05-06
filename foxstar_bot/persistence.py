@@ -529,6 +529,51 @@ class Database:
             )
             return int(cursor.lastrowid)
 
+    def add_accounting_entries_bulk(
+        self,
+        *,
+        chat_id: str,
+        created_by: str,
+        entry_type: str,
+        counterparties: list[str],
+        amount: float,
+        description: str,
+        currency: str = "CNY",
+        status: str = "open",
+    ) -> int:
+        names = [str(name or "").strip() for name in counterparties]
+        names = [name for name in names if name]
+        if not names:
+            return 0
+        now = utc_now()
+        rows = [
+            (
+                chat_id,
+                created_by,
+                entry_type,
+                name,
+                float(amount),
+                currency,
+                description,
+                status,
+                now,
+                now,
+            )
+            for name in names
+        ]
+        with self.connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO accounting_entries(
+                    chat_id, created_by, entry_type, counterparty, amount, currency,
+                    description, status, cleared_at, cleared_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                """,
+                rows,
+            )
+        return len(rows)
+
     def clear_accounting_owe(
         self,
         *,
