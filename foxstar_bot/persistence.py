@@ -608,6 +608,30 @@ class Database:
             )
             return int(cursor.rowcount or 0)
 
+    def delete_accounting_entry(
+        self,
+        *,
+        chat_id: str,
+        entry_id: int,
+    ) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, entry_type, counterparty, amount, currency, description, status,
+                       cleared_at, cleared_by, created_by, created_at, updated_at
+                FROM accounting_entries
+                WHERE chat_id = ? AND id = ?
+                """,
+                (chat_id, int(entry_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "DELETE FROM accounting_entries WHERE chat_id = ? AND id = ?",
+                (chat_id, int(entry_id)),
+            )
+        return dict(row)
+
     def lookup_accounting(
         self,
         chat_id: str,
@@ -616,7 +640,7 @@ class Database:
         days: int | None = 30,
         status: str | None = None,
         counterparty: str = "",
-        limit: int = 200,
+        limit: int = 5000,
     ) -> list[dict[str, Any]]:
         clauses = ["chat_id = ?"]
         params: list[Any] = [chat_id]
@@ -663,7 +687,7 @@ class Database:
             days=days,
             status=status,
             counterparty=counterparty,
-            limit=1000,
+            limit=5000,
         )
         total_amount = sum(float(row.get("amount") or 0.0) for row in rows)
         by_counterparty: dict[str, float] = {}
