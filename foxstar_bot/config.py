@@ -34,21 +34,14 @@ class ToolConfig:
 @dataclass(frozen=True)
 class ModelConfig:
     name: str = "gpt-4.1-mini"
-
     provider: str = "auto"
-
     reply_gate_model: str = "gpt-5-nano"
-
     vision_model: str = "gpt-4.1-mini"
-
     vision_provider: str = "openai"
-
+    gemini_vision_model: str = "gemini-3.1-flash-image-preview"
     reasoning_effort: str = "medium"
-
     verbosity: str = "medium"
-
     temperature: float = 0.4
-
     max_output_tokens: int = 700
 
 @dataclass(frozen=True)
