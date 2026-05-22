@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import os
-
 from dataclasses import dataclass, field
-
 from pathlib import Path
-
 from typing import Any
+
 
 @dataclass(frozen=True)
 class RateLimitConfig:
@@ -14,6 +12,7 @@ class RateLimitConfig:
     group_cooldown_seconds: int = 8
     user_daily_limit: int = 0
     group_daily_limit: int = 0
+
 
 @dataclass(frozen=True)
 class ToolConfig:
@@ -30,6 +29,7 @@ class ToolConfig:
     preferred_search_provider: str = "exa"
     exa_search_type: str = "auto"
     code_execution_enabled: bool = False
+
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -48,6 +48,7 @@ class ModelConfig:
     temperature: float = 0.4
     max_output_tokens: int = 700
 
+
 @dataclass(frozen=True)
 class ModelRouterTierConfig:
     provider: str = "openai"
@@ -55,10 +56,18 @@ class ModelRouterTierConfig:
     reasoning_effort: str = "medium"
     verbosity: str = "medium"
 
+
 @dataclass(frozen=True)
 class ModelRouterConfig:
     enabled: bool = False
-
+    low: ModelRouterTierConfig = field(
+        default_factory=lambda: ModelRouterTierConfig(
+            provider="sambanova",
+            model="MiniMax-M2.7",
+            reasoning_effort="low",
+            verbosity="low",
+        )
+    )
     medium: ModelRouterTierConfig = field(
         default_factory=lambda: ModelRouterTierConfig(
             provider="openrouter",
@@ -67,7 +76,6 @@ class ModelRouterConfig:
             verbosity="medium",
         )
     )
-
     high: ModelRouterTierConfig = field(
         default_factory=lambda: ModelRouterTierConfig(
             provider="openai",
@@ -77,17 +85,20 @@ class ModelRouterConfig:
         )
     )
 
+
 @dataclass(frozen=True)
 class StorageConfig:
     sqlite_path: Path = Path("data/foxstar.sqlite3")
     files_dir: Path = Path("data/files")
     images_dir: Path = Path("data/images")
 
+
 @dataclass
 class ReplyTimingConfig:
     min_delay_seconds: float = 3.0
     max_delay_seconds: float = 5.0
     between_messages_seconds: float = 1.0
+
 
 @dataclass(frozen=True)
 class AppConfig:
