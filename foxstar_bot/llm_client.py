@@ -2250,9 +2250,7 @@ def _chat_messages_for_provider(
     use_content_parts: bool = False,
     provider_name: str = "",
 ) -> list[dict[str, Any]]:
-    source_messages = messages
-    if provider_name == "minimax":
-        source_messages = _collapse_system_messages(messages)
+    source_messages = _collapse_system_messages(messages)
     rendered: list[dict[str, Any]] = []
     for item in source_messages:
         payload: dict[str, Any] = {
