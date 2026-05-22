@@ -1072,7 +1072,11 @@ class LLMClient:
         api_timeout = float(timeout or OPENROUTER_TIMEOUT)
         kwargs: dict[str, Any] = {
             "model": model_name,
-            "messages": _chat_messages_for_provider(messages, use_content_parts=use_content_parts),
+            "messages": _chat_messages_for_provider(
+                messages,
+                use_content_parts=use_content_parts,
+                provider_name=provider_name,
+            ),
             "timeout": api_timeout,
         }
         kwargs[max_tokens_field] = max_tokens
@@ -2240,9 +2244,17 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
                 )
     return citations
 
-def _chat_messages_for_provider(messages: list[dict[str, Any]], *, use_content_parts: bool = False) -> list[dict[str, Any]]:
+def _chat_messages_for_provider(
+    messages: list[dict[str, Any]],
+    *,
+    use_content_parts: bool = False,
+    provider_name: str = "",
+) -> list[dict[str, Any]]:
+    source_messages = messages
+    if provider_name == "minimax":
+        source_messages = _collapse_system_messages(messages)
     rendered: list[dict[str, Any]] = []
-    for item in messages:
+    for item in source_messages:
         payload: dict[str, Any] = {
             "role": item.get("role", "user"),
             "content": _provider_text_content(item.get("content", ""), use_content_parts),
@@ -2255,6 +2267,20 @@ def _chat_messages_for_provider(messages: list[dict[str, Any]], *, use_content_p
             payload["reasoning_content"] = item["reasoning_content"]
         rendered.append(payload)
     return rendered
+
+def _collapse_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    system_parts: list[str] = []
+    collapsed: list[dict[str, Any]] = []
+    for item in messages:
+        if item.get("role") == "system":
+            content = str(item.get("content", "") or "").strip()
+            if content:
+                system_parts.append(content)
+            continue
+        collapsed.append(item)
+    if not system_parts:
+        return list(messages)
+    return [{"role": "system", "content": "\n\n".join(system_parts)}] + collapsed
 
 def _provider_text_content(content: Any, use_content_parts: bool) -> Any:
     if not use_content_parts:
