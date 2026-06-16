@@ -189,6 +189,20 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_accounting_entries_chat_time ON accounting_entries(chat_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_accounting_entries_chat_type_status ON accounting_entries(chat_id, entry_type, status);
+
+                CREATE TABLE IF NOT EXISTS bug_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    created_by TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    closed_at TEXT,
+                    closed_by TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_bug_reports_chat_status ON bug_reports(chat_id, status, id);
+                CREATE INDEX IF NOT EXISTS idx_bug_reports_chat_time ON bug_reports(chat_id, created_at);
                 """
             )
             for statement in (
@@ -703,3 +717,92 @@ class Database:
             ],
             "rows": rows,
         }
+
+    def add_bug_report(
+        self,
+        *,
+        chat_id: str,
+        created_by: str,
+        description: str,
+    ) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO bug_reports(
+                    chat_id, created_by, description, status,
+                    closed_at, closed_by, created_at, updated_at
+                )
+                VALUES(?, ?, ?, 'open', NULL, NULL, ?, ?)
+                """,
+                (chat_id, created_by, description, now, now),
+            )
+            return int(cursor.lastrowid)
+
+    def list_bug_reports(
+        self,
+        chat_id: str,
+        *,
+        status: str = "open",
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        clauses = ["chat_id = ?"]
+        params: list[Any] = [chat_id]
+        if status and status != "all":
+            clauses.append("status = ?")
+            params.append(status)
+        params.append(int(limit))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, chat_id, created_by, description, status,
+                       closed_at, closed_by, created_at, updated_at
+                FROM bug_reports
+                WHERE {' AND '.join(clauses)}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_bug_report_status(
+        self,
+        *,
+        chat_id: str,
+        bug_id: int,
+        status: str,
+        actor: str,
+    ) -> dict[str, Any] | None:
+        normalized = (status or "").strip().lower()
+        if normalized not in {"open", "closed"}:
+            raise ValueError("bug status must be open or closed")
+        now = utc_now()
+        closed_at = now if normalized == "closed" else None
+        closed_by = actor if normalized == "closed" else None
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, chat_id, created_by, description, status,
+                       closed_at, closed_by, created_at, updated_at
+                FROM bug_reports
+                WHERE chat_id = ? AND id = ?
+                """,
+                (chat_id, int(bug_id)),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                """
+                UPDATE bug_reports
+                SET status = ?, closed_at = ?, closed_by = ?, updated_at = ?
+                WHERE chat_id = ? AND id = ?
+                """,
+                (normalized, closed_at, closed_by, now, chat_id, int(bug_id)),
+            )
+        updated = dict(row)
+        updated["status"] = normalized
+        updated["closed_at"] = closed_at
+        updated["closed_by"] = closed_by
+        updated["updated_at"] = now
+        return updated

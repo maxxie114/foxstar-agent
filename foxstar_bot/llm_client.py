@@ -2553,6 +2553,12 @@ def _canonical_tool_name(name: str) -> str:
 def _canonicalize_model_name(model: str) -> str:
     value = (model or "").strip()
     lowered = value.lower()
+    minimax_aliases = {
+        "minimax-m2.7": "MiniMax-M2.7",
+        "minimax-m3": "MiniMax-M3",
+    }
+    if lowered in minimax_aliases:
+        return minimax_aliases[lowered]
     if lowered.startswith(("gpt-", "o1", "o3", "o4")):
         return lowered
     return value
