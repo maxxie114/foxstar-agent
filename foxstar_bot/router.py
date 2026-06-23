@@ -210,6 +210,12 @@ def _looks_like_tool_leak(text: str) -> bool:
             return True
     return False
 
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
 def _is_timeout_error(exc: Exception) -> bool:
     current: BaseException | None = exc
     while current is not None:

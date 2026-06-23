@@ -203,6 +203,19 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_bug_reports_chat_status ON bug_reports(chat_id, status, id);
                 CREATE INDEX IF NOT EXISTS idx_bug_reports_chat_time ON bug_reports(chat_id, created_at);
+
+                CREATE TABLE IF NOT EXISTS finance_debug_outputs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    rendered_key TEXT NOT NULL,
+                    rendered_text TEXT NOT NULL,
+                    full_reply_text TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_finance_debug_chat_key_time
+                    ON finance_debug_outputs(chat_id, rendered_key, created_at);
                 """
             )
             for statement in (
@@ -226,7 +239,6 @@ class Database:
             return row["value"]
 
     def set_setting(self, key: str, value: Any) -> None:
-        now = utc_now()
         payload = json.dumps(value, ensure_ascii=False)
         with self.connect() as conn:
             conn.execute(
@@ -234,6 +246,42 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, payload),
             )
+
+    def add_finance_debug_output(
+        self,
+        *,
+        chat_id: str,
+        rendered_key: str,
+        rendered_text: str,
+        full_reply_text: str,
+        mode: str,
+        payload_json: str,
+    ) -> None:
+        now = utc_now()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO finance_debug_outputs(
+                    chat_id, rendered_key, rendered_text, full_reply_text, mode, payload_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (chat_id, rendered_key, rendered_text, full_reply_text, mode, payload_json, now),
+            )
+
+    def latest_finance_debug_output(self, *, chat_id: str, rendered_key: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, chat_id, rendered_key, rendered_text, full_reply_text, mode, payload_json, created_at
+                FROM finance_debug_outputs
+                WHERE chat_id = ? AND rendered_key = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (chat_id, rendered_key),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def record_token_usage(
         self,
