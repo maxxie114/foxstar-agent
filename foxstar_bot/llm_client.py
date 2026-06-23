@@ -10,6 +10,8 @@ import logging
 
 import mimetypes
 
+import os
+
 import re
 
 import time
@@ -25,6 +27,8 @@ from typing import Any
 from urllib.parse import quote
 
 from zoneinfo import ZoneInfo
+
+import requests
 
 from .config import ModelConfig
 
@@ -67,6 +71,7 @@ class LLMClient:
         together_api_key: str = "",
         lightning_api_key: str = "",
         minimax_api_key: str = "",
+        bedrock_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
         usage_recorder: Any | None = None,
@@ -79,6 +84,8 @@ class LLMClient:
         except Exception as exc:
             raise RuntimeError("需要安装 openai Python SDK") from exc
         timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=10.0, read=295.0, write=30.0, pool=10.0)
+        self._openai_class = OpenAI
+        self._httpx_timeout = timeout
         self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
         self.openrouter_client = (
             OpenAI(
@@ -134,6 +141,8 @@ class LLMClient:
             if minimax_api_key
             else None
         )
+        self.bedrock_client = bedrock_api_key or None
+        self._bedrock_clients: dict[tuple[str, str], Any] = {}
         self.sambanova_client = (
             OpenAI(
                 api_key=sambanova_api_key,
@@ -220,6 +229,17 @@ class LLMClient:
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        if resolved_provider == "bedrock":
+            return self._bedrock_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
                 timeout=timeout,
                 usage_context=usage_context,
             )
@@ -596,6 +616,18 @@ class LLMClient:
                 tool_handlers,
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        if resolved_provider == "bedrock":
+            return self._bedrock_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_output_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
                 max_tool_rounds=max_tool_rounds,
                 usage_context=usage_context,
             )
@@ -1052,6 +1084,491 @@ class LLMClient:
             usage_context=usage_context,
         )
 
+    def _bedrock_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        family = _bedrock_model_family(model_name)
+        if family == "openai":
+            return self._bedrock_openai_chat(
+                messages,
+                model_name,
+                max_output_tokens=max_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        if family == "anthropic":
+            return self._bedrock_anthropic_chat(
+                messages,
+                model_name,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        extra_kwargs = {"extra_body": {"reasoning_split": True}} if model_name.lower().startswith("minimax.") else None
+        return self._compatible_chat(
+            client=self._bedrock_openai_client(model_name),
+            provider_name="bedrock",
+            messages=messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            timeout=timeout,
+            max_tokens_field="max_completion_tokens",
+            extra_create_kwargs=extra_kwargs,
+            usage_context=usage_context,
+        )
+
+    def _bedrock_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_output_tokens: int,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        family = _bedrock_model_family(model_name)
+        if family == "openai":
+            return self._bedrock_openai_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_output_tokens=max_output_tokens,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        if family == "anthropic":
+            return self._bedrock_anthropic_chat_with_tools(
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        extra_kwargs = {"extra_body": {"reasoning_split": True}} if model_name.lower().startswith("minimax.") else None
+        return self._compatible_chat_with_tools(
+            client=self._bedrock_openai_client(model_name),
+            provider_name="bedrock",
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            model_name=model_name,
+            max_tokens=max_output_tokens,
+            max_tool_rounds=max_tool_rounds,
+            max_tokens_field="max_completion_tokens",
+            extra_create_kwargs=extra_kwargs,
+            usage_context=usage_context,
+        )
+
+    def _bedrock_openai_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_output_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        client = self._bedrock_openai_client(model_name)
+        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
+        input_items = [
+            {"role": item["role"], "content": item["content"]}
+            for item in messages
+            if item.get("role") in {"user", "assistant"}
+        ]
+        kwargs: dict[str, Any] = {
+            "model": model_name,
+            "instructions": instructions,
+            "input": input_items,
+            "max_output_tokens": max_output_tokens,
+            "timeout": api_timeout,
+        }
+        if temperature is not None and _model_supports_temperature(model_name):
+            kwargs["temperature"] = temperature
+        effort = _normalize_reasoning_effort(reasoning_effort)
+        if effort:
+            kwargs["reasoning"] = {"effort": effort}
+        text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
+        if text_verbosity:
+            kwargs["text"] = {"verbosity": text_verbosity}
+        response = _openai_call_with_retry("bedrock.responses.create", api_timeout + 2.0, client.responses.create, **kwargs)
+        _log_prompt_cache_usage("bedrock.responses.create", model_name, getattr(response, "usage", None))
+        self._record_usage(usage_context, api="bedrock.responses.create", model=model_name, provider="bedrock", usage=getattr(response, "usage", None))
+        trace_id = _response_trace_id(response)
+        LOG.info(
+            "llm_response api=bedrock.responses model=%s trace_id=%s status=%s usage=%s",
+            model_name,
+            trace_id,
+            getattr(response, "status", ""),
+            getattr(response, "usage", None),
+        )
+        content = (response.output_text or "").strip()
+        if not content:
+            LOG.warning("bedrock responses returned empty text model=%s trace_id=%s", model_name, trace_id)
+        return content
+
+    def _bedrock_openai_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_output_tokens: int,
+        reasoning_effort: str | None = None,
+        verbosity: str | None = None,
+        max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        client = self._bedrock_openai_client(model_name)
+        instructions = "\n\n".join(str(item["content"]) for item in messages if item.get("role") == "system")
+        input_items: list[Any] = [
+            {"role": item["role"], "content": item["content"]}
+            for item in messages
+            if item.get("role") in {"user", "assistant"}
+        ]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        failed_tool_signatures: dict[tuple[str, str], int] = {}
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "instructions": instructions,
+                "input": input_items,
+                "tools": tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "max_output_tokens": max_output_tokens,
+                "timeout": RESPONSES_TIMEOUT,
+            }
+            effort = _normalize_reasoning_effort(reasoning_effort or self.config.reasoning_effort)
+            if effort:
+                kwargs["reasoning"] = {"effort": effort}
+            text_verbosity = (verbosity or self.config.verbosity or "").strip().lower()
+            if text_verbosity:
+                kwargs["text"] = {"verbosity": text_verbosity}
+            LOG.info(
+                "llm_tool_request api=bedrock.responses model=%s round=%s/%s input_items=%s tools=%s max_output_tokens=%s",
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(input_items),
+                [tool.get("name", "") for tool in tools],
+                max_output_tokens,
+            )
+            response = _openai_call_with_retry("bedrock.responses.create", RESPONSES_TIMEOUT + 2.0, client.responses.create, **kwargs)
+            trace_id = _response_trace_id(response)
+            LOG.info(
+                "llm_tool_response api=bedrock.responses model=%s round=%s trace_id=%s status=%s output_items=%s",
+                model_name,
+                round_index + 1,
+                trace_id,
+                getattr(response, "status", ""),
+                len(list(response.output or [])),
+            )
+            _log_prompt_cache_usage("bedrock.responses.create", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api="bedrock.responses.create", model=model_name, provider="bedrock", usage=getattr(response, "usage", None))
+            output = list(response.output or [])
+            input_items.extend(output)
+            tool_calls = [item for item in output if getattr(item, "type", "") == "function_call"]
+            if not tool_calls:
+                return (response.output_text or "").strip()
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=bedrock.responses model=%s round=%s trace_id=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    call.name,
+                    call.call_id,
+                    _compact_json(call.arguments),
+                )
+                _tool_trace(
+                    phase="input",
+                    api="bedrock.responses",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.name,
+                    call_id=call.call_id,
+                    payload=call.arguments,
+                    trace_id=trace_id,
+                )
+                handler = tool_handlers.get(call.name)
+                args: dict[str, Any] = {}
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.name}"}
+                else:
+                    try:
+                        args = json.loads(call.arguments or "{}")
+                        blocked = _blocked_repeated_failed_tool_call(failed_tool_signatures, call.name, args)
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                _remember_failed_tool_signature(failed_tool_signatures, call.name, args, result)
+                LOG.info(
+                    "llm_tool_result api=bedrock.responses model=%s round=%s trace_id=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    call.name,
+                    call.call_id,
+                    _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="bedrock.responses",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.name,
+                    call_id=call.call_id,
+                    payload=result,
+                    trace_id=trace_id,
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": call.call_id,
+                        "output": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        LOG.warning("llm_tool_budget_exhausted api=bedrock.responses model=%s rounds=%s", model_name, tool_rounds)
+        return self._bedrock_openai_chat(
+            messages,
+            model_name,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            verbosity=verbosity,
+            usage_context=usage_context,
+        )
+
+    def _bedrock_anthropic_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        system_text, anthropic_messages = _bedrock_anthropic_prompt(messages)
+        payload: dict[str, Any] = {
+            "model": model_name,
+            "max_tokens": max_tokens,
+            "messages": anthropic_messages,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if temperature is not None and _model_supports_temperature(model_name):
+            payload["temperature"] = temperature
+        body, trace_id = self._bedrock_anthropic_post(payload, timeout=timeout)
+        text = _bedrock_anthropic_text(body)
+        LOG.info(
+            "llm_response api=bedrock.anthropic model=%s trace_id=%s stop_reason=%s usage=%s",
+            model_name,
+            trace_id,
+            body.get("stop_reason"),
+            _compact_json(body.get("usage")),
+        )
+        self._record_usage(usage_context, api="bedrock.anthropic.messages", model=model_name, provider="bedrock", usage=None)
+        return text
+
+    def _bedrock_anthropic_chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        system_text, convo = _bedrock_anthropic_prompt(messages)
+        anthropic_tools = [_responses_tool_to_anthropic_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        failed_tool_signatures: dict[tuple[str, str], int] = {}
+        for round_index in range(tool_rounds):
+            payload: dict[str, Any] = {
+                "model": model_name,
+                "max_tokens": max_tokens,
+                "messages": convo,
+                "tools": anthropic_tools,
+            }
+            if system_text:
+                payload["system"] = system_text
+            body, trace_id = self._bedrock_anthropic_post(payload, timeout=OPENROUTER_TIMEOUT)
+            items = list(body.get("content") or [])
+            tool_uses = [item for item in items if item.get("type") == "tool_use"]
+            text = _bedrock_anthropic_text(body)
+            LOG.info(
+                "llm_tool_response api=bedrock.anthropic model=%s round=%s trace_id=%s tool_calls=%s stop_reason=%s content_preview=%r",
+                model_name,
+                round_index + 1,
+                trace_id,
+                [item.get("name", "") for item in tool_uses],
+                body.get("stop_reason"),
+                text[:300],
+            )
+            self._record_usage(usage_context, api="bedrock.anthropic.messages", model=model_name, provider="bedrock", usage=None)
+            if not tool_uses:
+                return text
+            convo.append({"role": "assistant", "content": items})
+            tool_results: list[dict[str, Any]] = []
+            for item in tool_uses:
+                tool_name = str(item.get("name") or "")
+                tool_id = str(item.get("id") or "")
+                args = item.get("input") if isinstance(item.get("input"), dict) else {}
+                LOG.info(
+                    "llm_tool_call api=bedrock.anthropic model=%s round=%s trace_id=%s name=%s call_id=%s args=%s",
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    tool_name,
+                    tool_id,
+                    _compact_json(args),
+                )
+                _tool_trace(
+                    phase="input",
+                    api="bedrock.anthropic",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=tool_name,
+                    call_id=tool_id,
+                    payload=args,
+                    trace_id=trace_id,
+                )
+                handler = tool_handlers.get(tool_name)
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {tool_name}"}
+                else:
+                    try:
+                        blocked = _blocked_repeated_failed_tool_call(failed_tool_signatures, tool_name, args)
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                _remember_failed_tool_signature(failed_tool_signatures, tool_name, args, result)
+                LOG.info(
+                    "llm_tool_result api=bedrock.anthropic model=%s round=%s trace_id=%s name=%s call_id=%s result=%s",
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    tool_name,
+                    tool_id,
+                    _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api="bedrock.anthropic",
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=tool_name,
+                    call_id=tool_id,
+                    payload=result,
+                    trace_id=trace_id,
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+            convo.append({"role": "user", "content": tool_results})
+        LOG.warning("llm_tool_budget_exhausted api=bedrock.anthropic model=%s rounds=%s", model_name, tool_rounds)
+        return self._bedrock_anthropic_chat(
+            messages,
+            model_name,
+            max_tokens=max_tokens,
+            usage_context=usage_context,
+        )
+
+    def _bedrock_openai_client(self, model_name: str) -> Any:
+        if not self.bedrock_client:
+            raise RuntimeError("BEDROCK_API_KEY / BEDROCK_KEY_1 is not configured")
+        family = _bedrock_model_family(model_name)
+        region = _bedrock_region_for_model(model_name)
+        cache_key = (family, region)
+        client = self._bedrock_clients.get(cache_key)
+        if client is not None:
+            return client
+        if family == "openai":
+            base_url = f"https://bedrock-mantle.{region}.api.aws/openai/v1"
+        else:
+            base_url = f"https://bedrock-mantle.{region}.api.aws/v1"
+        client = self._openai_class(
+            api_key=self.bedrock_client,
+            base_url=base_url,
+            timeout=self._httpx_timeout,
+            max_retries=0,
+        )
+        self._bedrock_clients[cache_key] = client
+        return client
+
+    def _bedrock_anthropic_post(self, payload: dict[str, Any], *, timeout: float | None = None) -> tuple[dict[str, Any], str]:
+        if not self.bedrock_client:
+            raise RuntimeError("BEDROCK_API_KEY / BEDROCK_KEY_1 is not configured")
+        model_name = str(payload.get("model") or "")
+        region = _bedrock_region_for_model(model_name)
+        url = f"https://bedrock-mantle.{region}.api.aws/anthropic/v1/messages"
+        response = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.bedrock_client}",
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01",
+            },
+            json=payload,
+            timeout=float(timeout or OPENROUTER_TIMEOUT),
+        )
+        trace_id = (
+            response.headers.get("x-request-id")
+            or response.headers.get("x-amzn-requestid")
+            or response.headers.get("x-amzn-request-id")
+            or ""
+        )
+        body = response.json()
+        if response.status_code >= 400:
+            raise RuntimeError(f"Bedrock Anthropic error {response.status_code} trace_id={trace_id} body={_compact_json(body)}")
+        if not trace_id:
+            trace_id = str(body.get("id") or body.get("request_id") or "")
+        return body, trace_id
+
     def _compatible_chat(
         self,
         *,
@@ -1092,7 +1609,16 @@ class LLMClient:
         )
         _log_prompt_cache_usage(f"{provider_name}.chat.completions", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api=f"{provider_name}.chat.completions", model=model_name, provider=provider_name, usage=getattr(response, "usage", None))
+        trace_id = _response_trace_id(response)
         choice = response.choices[0]
+        LOG.info(
+            "llm_response api=%s.chat.completions model=%s trace_id=%s finish_reason=%s usage=%s",
+            provider_name,
+            model_name,
+            trace_id,
+            getattr(choice, "finish_reason", None),
+            getattr(response, "usage", None),
+        )
         _testing_trace_response(
             usage_context=usage_context,
             api=f"{provider_name}.chat.completions",
@@ -1622,6 +2148,178 @@ class LLMClient:
             usage_context=usage_context,
         )
 
+    def _compatible_chat_with_tools(
+        self,
+        *,
+        client: Any,
+        provider_name: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        max_tokens: int,
+        max_tool_rounds: int = 4,
+        use_content_parts: bool = False,
+        max_tokens_field: str = "max_tokens",
+        extra_create_kwargs: dict[str, Any] | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        if client is None:
+            raise RuntimeError(f"{provider_name.upper()}_API_KEY is not configured")
+        chat_messages = _chat_messages_for_provider(
+            messages,
+            use_content_parts=use_content_parts,
+            provider_name=provider_name,
+        )
+        chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
+        tool_rounds = max(1, min(max_tool_rounds, 12))
+        failed_tool_signatures: dict[tuple[str, str], int] = {}
+        for round_index in range(tool_rounds):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "messages": chat_messages,
+                "tools": chat_tools,
+                "tool_choice": "auto",
+                "parallel_tool_calls": False,
+                "timeout": OPENROUTER_TIMEOUT,
+            }
+            kwargs[max_tokens_field] = max_tokens
+            if _model_supports_temperature(model_name):
+                kwargs["temperature"] = self.config.temperature
+            if extra_create_kwargs:
+                kwargs.update(extra_create_kwargs)
+            LOG.info(
+                "llm_tool_request api=%s model=%s round=%s/%s messages=%s tools=%s max_tokens=%s",
+                provider_name,
+                model_name,
+                round_index + 1,
+                tool_rounds,
+                len(chat_messages),
+                [tool.get("function", {}).get("name", "") for tool in chat_tools],
+                max_tokens,
+            )
+            response = _call_with_hard_timeout(
+                f"{provider_name}.chat.completions",
+                OPENROUTER_TIMEOUT + 5.0,
+                client.chat.completions.create,
+                **kwargs,
+            )
+            _log_prompt_cache_usage(f"{provider_name}.chat.completions", model_name, getattr(response, "usage", None))
+            self._record_usage(usage_context, api=f"{provider_name}.chat.completions", model=model_name, provider=provider_name, usage=getattr(response, "usage", None))
+            trace_id = _response_trace_id(response)
+            choice = response.choices[0]
+            message = choice.message
+            tool_calls = list(getattr(message, "tool_calls", None) or [])
+            content = _sanitize_provider_content(message.content or "", provider_name=provider_name)
+            LOG.info(
+                "llm_tool_response api=%s model=%s round=%s trace_id=%s finish_reason=%s tool_calls=%s has_reasoning=%s content_preview=%r usage=%s",
+                provider_name,
+                model_name,
+                round_index + 1,
+                trace_id,
+                getattr(choice, "finish_reason", None),
+                [call.function.name for call in tool_calls],
+                bool(_message_reasoning_content(message)),
+                content[:300],
+                getattr(response, "usage", None),
+            )
+            if not tool_calls:
+                interpreted = _handle_plaintext_tool_call(content, tool_handlers)
+                if interpreted is not None:
+                    LOG.warning(
+                        "llm_tool_plaintext_interpreted api=%s model=%s round=%s content=%r result=%s",
+                        provider_name,
+                        model_name,
+                        round_index + 1,
+                        content[:300],
+                        _compact_json(interpreted),
+                    )
+                    if isinstance(interpreted, dict) and interpreted.get("__terminal_response__"):
+                        return str(interpreted.get("text", "")).strip()
+                    return ""
+                return content
+            chat_messages.append(_assistant_tool_message(message, use_content_parts=use_content_parts))
+            for call in tool_calls:
+                LOG.info(
+                    "llm_tool_call api=%s model=%s round=%s trace_id=%s name=%s call_id=%s arguments=%s",
+                    provider_name,
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    call.function.name,
+                    call.id,
+                    _compact_json(call.function.arguments),
+                )
+                _tool_trace(
+                    phase="input",
+                    api=provider_name,
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=call.function.arguments,
+                    trace_id=trace_id,
+                )
+                handler = tool_handlers.get(call.function.name)
+                args: dict[str, Any] = {}
+                if handler is None:
+                    result = {"ok": False, "error": f"unknown tool: {call.function.name}"}
+                else:
+                    try:
+                        args = json.loads(call.function.arguments or "{}")
+                        blocked = _blocked_repeated_failed_tool_call(
+                            failed_tool_signatures,
+                            call.function.name,
+                            args,
+                        )
+                        if blocked is not None:
+                            result = blocked
+                        else:
+                            result = handler(**args)
+                    except Exception as exc:
+                        result = {"ok": False, "error": str(exc)}
+                _remember_failed_tool_signature(failed_tool_signatures, call.function.name, args if 'args' in locals() else {}, result)
+                LOG.info(
+                    "llm_tool_result api=%s model=%s round=%s trace_id=%s name=%s call_id=%s result=%s",
+                    provider_name,
+                    model_name,
+                    round_index + 1,
+                    trace_id,
+                    call.function.name,
+                    call.id,
+                    _compact_json(result),
+                )
+                _tool_trace(
+                    phase="output",
+                    api=provider_name,
+                    model=model_name,
+                    round_index=round_index + 1,
+                    tool_name=call.function.name,
+                    call_id=call.id,
+                    payload=result,
+                    trace_id=trace_id,
+                )
+                if isinstance(result, dict) and result.get("__terminal_response__"):
+                    return str(result.get("text", "")).strip()
+                chat_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": _provider_text_content(json.dumps(result, ensure_ascii=False), use_content_parts),
+                    }
+                )
+        LOG.warning("llm_tool_budget_exhausted api=%s model=%s rounds=%s", provider_name, model_name, tool_rounds)
+        return self._compatible_chat(
+            client=client,
+            provider_name=provider_name,
+            messages=chat_messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+            use_content_parts=use_content_parts,
+            usage_context=usage_context,
+        )
+
     def _fireworks_chat_with_tools(
         self,
         messages: list[dict[str, Any]],
@@ -2123,6 +2821,7 @@ def _tool_trace(
     tool_name: str,
     call_id: str,
     payload: Any,
+    trace_id: str = "",
 ) -> None:
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -2132,6 +2831,7 @@ def _tool_trace(
         "round": round_index,
         "tool_name": tool_name,
         "call_id": call_id,
+        "trace_id": trace_id,
         "payload": payload,
     }
     try:
@@ -2310,7 +3010,7 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "fireworks", "sambanova"}:
+    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "bedrock", "fireworks", "sambanova"}:
         return value
     model_name = (model or "").strip().lower()
     if model_name.startswith("deepseek-"):
@@ -2324,6 +3024,23 @@ def _resolve_provider(provider: str | None, model: str) -> str:
     if model_name.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     return "openrouter"
+
+def _bedrock_model_family(model: str) -> str:
+    model_name = (model or "").strip().lower()
+    if model_name.startswith("anthropic."):
+        return "anthropic"
+    if model_name.startswith("openai."):
+        return "openai"
+    return "compat"
+
+def _bedrock_region_for_model(model: str) -> str:
+    model_name = (model or "").strip().lower()
+    global_region = (os.environ.get("BEDROCK_REGION") or "").strip()
+    if model_name.startswith("openai."):
+        return (os.environ.get("BEDROCK_OPENAI_REGION") or global_region or "us-east-2").strip()
+    if model_name.startswith("anthropic."):
+        return (os.environ.get("BEDROCK_ANTHROPIC_REGION") or global_region or "us-east-1").strip()
+    return (os.environ.get("BEDROCK_COMPAT_REGION") or global_region or "us-east-1").strip()
 
 def _normalize_reasoning_effort(value: str | None, *, preserve_max: bool = False) -> str:
     effort = (value or "").strip().lower()
@@ -2466,6 +3183,23 @@ def _reasoning_budget_for_effort(effort: str) -> int:
         return 12288
     return 8192
 
+def _response_trace_id(response: Any) -> str:
+    trace_id = str(getattr(response, "id", "") or "")
+    if trace_id:
+        return trace_id
+    headers = getattr(response, "headers", None)
+    if headers:
+        try:
+            return str(
+                headers.get("x-request-id")
+                or headers.get("x-amzn-requestid")
+                or headers.get("x-amzn-request-id")
+                or ""
+            )
+        except Exception:
+            return ""
+    return ""
+
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "function",
@@ -2475,6 +3209,34 @@ def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
             "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
         },
     }
+
+def _responses_tool_to_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": tool.get("name", ""),
+        "description": tool.get("description", ""),
+        "input_schema": tool.get("parameters", {"type": "object", "properties": {}}),
+    }
+
+def _bedrock_anthropic_prompt(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    collapsed = _collapse_system_messages(messages)
+    system_text = ""
+    prompt_messages: list[dict[str, Any]] = []
+    for item in collapsed:
+        role = str(item.get("role", "user"))
+        if role == "system":
+            system_text = str(item.get("content", "") or "")
+            continue
+        if role not in {"user", "assistant"}:
+            continue
+        prompt_messages.append({"role": role, "content": str(item.get("content", "") or "")})
+    return system_text, prompt_messages
+
+def _bedrock_anthropic_text(body: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for item in list(body.get("content") or []):
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
+            parts.append(str(item.get("text")))
+    return "".join(parts).strip()
 
 def _handle_plaintext_tool_call(content: str, tool_handlers: dict[str, Any]) -> dict[str, Any] | None:
     text = (content or "").strip()

@@ -12,6 +12,7 @@ from foxstar_bot.llm_client import (
 def test_resolve_provider_routes_deepseek_models():
     assert _resolve_provider("auto", "deepseek-v4-pro") == "deepseek"
     assert _resolve_provider("deepseek", "deepseek-v4-flash") == "deepseek"
+    assert _resolve_provider("bedrock", "openai.gpt-5.5") == "bedrock"
 
 
 def test_deepseek_reasoning_effort_mapping():

@@ -117,6 +117,7 @@ class AppConfig:
     together_api_key: str = ""
     lightning_api_key: str = ""
     minimax_api_key: str = ""
+    bedrock_api_key: str = ""
     sambanova_api_key: str = ""
     fireworks_api_key: str = ""
     log_level: str = "INFO"
