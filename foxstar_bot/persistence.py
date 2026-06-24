@@ -789,24 +789,30 @@ class Database:
 
     def list_bug_reports(
         self,
-        chat_id: str,
+        chat_id: str | None = None,
         *,
         status: str = "open",
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        clauses = ["chat_id = ?"]
-        params: list[Any] = [chat_id]
+        clauses: list[str] = []
+        params: list[Any] = []
+
+
+        if chat_id:
+            clauses.append("chat_id = ?")
+            params.append(chat_id)
         if status and status != "all":
             clauses.append("status = ?")
             params.append(status)
         params.append(int(limit))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
                 SELECT id, chat_id, created_by, description, status,
                        closed_at, closed_by, created_at, updated_at
                 FROM bug_reports
-                WHERE {' AND '.join(clauses)}
+                {where}
                 ORDER BY id DESC
                 LIMIT ?
                 """,
@@ -817,10 +823,10 @@ class Database:
     def update_bug_report_status(
         self,
         *,
-        chat_id: str,
         bug_id: int,
         status: str,
         actor: str,
+        chat_id: str | None = None,
     ) -> dict[str, Any] | None:
         normalized = (status or "").strip().lower()
         if normalized not in {"open", "closed"}:
@@ -828,15 +834,21 @@ class Database:
         now = utc_now()
         closed_at = now if normalized == "closed" else None
         closed_by = actor if normalized == "closed" else None
+        clauses = ["id = ?"]
+        params: list[Any] = [int(bug_id)]
+        if chat_id:
+            clauses.append("chat_id = ?")
+            params.append(chat_id)
+        where = " AND ".join(clauses)
         with self.connect() as conn:
             row = conn.execute(
                 """
                 SELECT id, chat_id, created_by, description, status,
                        closed_at, closed_by, created_at, updated_at
                 FROM bug_reports
-                WHERE chat_id = ? AND id = ?
-                """,
-                (chat_id, int(bug_id)),
+                WHERE """
+                + where,
+                tuple(params),
             ).fetchone()
             if row is None:
                 return None
@@ -844,9 +856,9 @@ class Database:
                 """
                 UPDATE bug_reports
                 SET status = ?, closed_at = ?, closed_by = ?, updated_at = ?
-                WHERE chat_id = ? AND id = ?
-                """,
-                (normalized, closed_at, closed_by, now, chat_id, int(bug_id)),
+                WHERE """
+                + where,
+                tuple([normalized, closed_at, closed_by, now] + params),
             )
         updated = dict(row)
         updated["status"] = normalized
