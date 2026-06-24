@@ -560,7 +560,7 @@ class LLMClient:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
@@ -1141,7 +1141,7 @@ class LLMClient:
         max_output_tokens: int,
         reasoning_effort: str | None = None,
         verbosity: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         family = _bedrock_model_family(model_name)
@@ -1243,7 +1243,7 @@ class LLMClient:
         max_output_tokens: int,
         reasoning_effort: str | None = None,
         verbosity: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         client = self._bedrock_openai_client(model_name)
@@ -1411,7 +1411,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         system_text, convo = _bedrock_anthropic_prompt(messages)
@@ -1750,7 +1750,7 @@ class LLMClient:
         *,
         max_tokens: int,
         reasoning_effort: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.openrouter_client is None:
@@ -1907,7 +1907,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float | None = None,
         reasoning_effort: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.deepseek_client is None:
@@ -2062,7 +2062,7 @@ class LLMClient:
         *,
         max_tokens: int,
         reasoning_effort: str | None = None,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         try:
@@ -2107,7 +2107,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         return self._compatible_chat_with_tools(
@@ -2131,7 +2131,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         return self._compatible_chat_with_tools(
@@ -2158,7 +2158,7 @@ class LLMClient:
         tool_handlers: dict[str, Any],
         model_name: str,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         use_content_parts: bool = False,
         max_tokens_field: str = "max_tokens",
         extra_create_kwargs: dict[str, Any] | None = None,
@@ -2328,7 +2328,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.fireworks_client is None:
@@ -2469,7 +2469,7 @@ class LLMClient:
         model_name: str,
         *,
         max_tokens: int,
-        max_tool_rounds: int = 4,
+        max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.sambanova_client is None:
