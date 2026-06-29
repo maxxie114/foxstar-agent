@@ -32,7 +32,9 @@ def delivery_parts_for_style(reply: str, style_value: object, line_chars: int | 
         return []
     style = parse_stored_style(str(style_value or "strict"))
     if style.format_style == "free":
-        return [text]
+
+
+        return _wechat_safe_sections(text)
     if style.format_style == "human":
         return split_reply_messages(
             text,
@@ -47,6 +49,62 @@ def delivery_parts_for_style(reply: str, style_value: object, line_chars: int | 
         max_line_chars=line_chars or 45,
         split_on_sentences=True,
     )
+
+WECHAT_MAX_PART_BYTES = 1500
+
+def _wechat_safe_sections(text: str) -> list[str]:
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text.encode("utf-8")) <= WECHAT_MAX_PART_BYTES:
+        return [text]
+
+
+    sections = [s.strip() for s in re.split(r"\n\s*\n", text) if s.strip()]
+
+
+    atoms: list[str] = []
+    for section in sections:
+        if len(section.encode("utf-8")) <= WECHAT_MAX_PART_BYTES:
+            atoms.append(section)
+            continue
+        lines = [ln.strip() for ln in section.splitlines() if ln.strip()]
+        for ln in lines:
+            if len(ln.encode("utf-8")) <= WECHAT_MAX_PART_BYTES:
+                atoms.append(ln)
+            else:
+                atoms.extend(_hard_wrap_utf8(ln, WECHAT_MAX_PART_BYTES))
+
+    parts: list[str] = []
+    chunk: list[str] = []
+    chunk_bytes = 0
+    for atom in atoms:
+        join_overhead = (2 if chunk else 0)
+        atom_bytes = len(atom.encode("utf-8"))
+        if chunk and chunk_bytes + join_overhead + atom_bytes > WECHAT_MAX_PART_BYTES:
+            parts.append("\n\n".join(chunk))
+            chunk, chunk_bytes = [], 0
+            join_overhead = 0
+        chunk.append(atom)
+        chunk_bytes += join_overhead + atom_bytes
+    if chunk:
+        parts.append("\n\n".join(chunk))
+    return [p for p in parts if p.strip()]
+
+def _hard_wrap_utf8(text: str, max_bytes: int) -> list[str]:
+    out: list[str] = []
+    buf: list[str] = []
+    buf_bytes = 0
+    for ch in text:
+        ch_bytes = len(ch.encode("utf-8"))
+        if buf and buf_bytes + ch_bytes > max_bytes:
+            out.append("".join(buf))
+            buf, buf_bytes = [], 0
+        buf.append(ch)
+        buf_bytes += ch_bytes
+    if buf:
+        out.append("".join(buf))
+    return out
 
 def _parse_reply_decision(decision: str) -> bool:
     first = (decision or "").strip().split()
