@@ -6,6 +6,10 @@ from .persistence import Database, utc_now
 
 from .privacy import public_participant_label, redact_private_ids
 
+DEFAULT_CONTEXT_MESSAGES = 30
+
+MAX_CONTEXT_MESSAGES = 200
+
 class ContextStore:
     def suppress_message(self, chat_id: str, *, user_id: str, role: str, content: str) -> None:
         normalized = _normalized_for_dedupe(content)
