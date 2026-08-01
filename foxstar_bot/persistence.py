@@ -65,6 +65,7 @@ class Database:
                     created_at TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_messages_chat_id_id ON messages(chat_id, id);
 
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

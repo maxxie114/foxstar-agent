@@ -10,7 +10,14 @@ DEFAULT_CONTEXT_MESSAGES = 30
 
 MAX_CONTEXT_MESSAGES = 200
 
+CONTEXT_COMPRESSION_MESSAGES = 500
+
 class ContextStore:
+    def __init__(self, db: Database, max_turns: int = DEFAULT_CONTEXT_MESSAGES) -> None:
+        self.db = db
+        self.max_turns = max_turns
+        self._suppressed_context_keys: dict[str, deque[tuple[str, str, str]]] = defaultdict(lambda: deque(maxlen=64))
+
     def suppress_message(self, chat_id: str, *, user_id: str, role: str, content: str) -> None:
         normalized = _normalized_for_dedupe(content)
         if not normalized:

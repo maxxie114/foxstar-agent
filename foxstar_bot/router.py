@@ -26,6 +26,10 @@ LOG = logging.getLogger(__name__)
 
 from typing import Any
 
+CONTEXT_COMPRESSION_REFRESH_MESSAGES = 20
+
+CONTEXT_COMPRESSION_MAX_PENDING_CHATS = 8
+
 def delivery_parts_for_style(reply: str, style_value: object, line_chars: int | None = None) -> list[str]:
     text = (reply or "").strip()
     if not text:
@@ -282,3 +286,39 @@ def _is_timeout_error(exc: Exception) -> bool:
             return True
         current = current.__cause__
     return False
+
+class ContextCompressor:
+    def __init__(self, db, llm, config):
+        self.db = db
+        self.llm = llm
+        self.config = config
+        self.context = ContextStore(db)
+        self._context_compression_executor = ThreadPoolExecutor(max_workers=2)
+        self._context_compression_futures = {}
+        self._context_compression_lock = Lock()
+        self._context_compression_closed = False
+
+    def refresh(self, chat_id, context_messages):
+        context_messages = normalize_context_messages(context_messages)
+        cached = self._context_summary_cache(chat_id, context_messages)
+        limit = CONTEXT_COMPRESSION_MESSAGES
+        if self.config.model.context_compression_provider == "sambanova":
+            limit = max(4, min(12, (3000 - len(str(cached.get("summary") or ""))) // 200))
+        source, _, _ = self.context.rolling_window(
+            chat_id, max_turns=context_messages,
+            summarized_through_id=_safe_int(cached.get("source_last_id", 0)),
+            compression_limit=limit,
+        )
+        self._schedule_context_compression(chat_id, context_messages, source, cached)
+        return cached
+
+    def close(self):
+        with self._context_compression_lock:
+            self._context_compression_closed = True
+        self._context_compression_executor.shutdown(wait=True)
+
+    def _context_summary_cache(self, chat_id: str, context_messages: int) -> dict[str, object]:
+        value = self.db.get_setting(f"group_context_summary:{chat_id}", {})
+        if not isinstance(value, dict) or int(value.get("context_messages", 0) or 0) != context_messages:
+            return {}
+        return value
