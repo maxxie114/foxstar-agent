@@ -12,10 +12,19 @@ MAX_CONTEXT_MESSAGES = 200
 
 CONTEXT_COMPRESSION_MESSAGES = 500
 
+CONTEXT_BRIDGE_MESSAGES = 40
+
+def normalize_context_messages(value: object, default: int = DEFAULT_CONTEXT_MESSAGES) -> int:
+    try:
+        message_count = int(value)
+    except (TypeError, ValueError):
+        message_count = default
+    return max(1, min(message_count, MAX_CONTEXT_MESSAGES))
+
 class ContextStore:
     def __init__(self, db: Database, max_turns: int = DEFAULT_CONTEXT_MESSAGES) -> None:
         self.db = db
-        self.max_turns = max_turns
+        self.max_turns = normalize_context_messages(max_turns)
         self._suppressed_context_keys: dict[str, deque[tuple[str, str, str]]] = defaultdict(lambda: deque(maxlen=64))
 
     def suppress_message(self, chat_id: str, *, user_id: str, role: str, content: str) -> None:
@@ -46,6 +55,24 @@ class ContextStore:
                 continue
             rendered.append(f"{role}: {content}")
         return rendered
+
+    @staticmethod
+    def render_compression_source(items: list[dict[str, object]], per_message_limit: int = 180) -> str:
+        seen: set[tuple[str, str]] = set()
+        lines: list[str] = []
+        for item in items:
+            if item.get("role") == "assistant":
+                role = "bot"
+            else:
+                user_id = str(item.get("user_id") or "user")
+                role = public_participant_label(user_id)
+            content = _compact_content(redact_private_ids(str(item.get("content") or "")), limit=per_message_limit)
+            key = (role, _normalized_for_dedupe(content).lower())
+            if not content or key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines)
 
     @staticmethod
     def _trim(content: str, limit: int = 2000) -> str:

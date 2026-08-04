@@ -30,6 +30,8 @@ CONTEXT_COMPRESSION_REFRESH_MESSAGES = 20
 
 CONTEXT_COMPRESSION_MAX_PENDING_CHATS = 8
 
+CONTEXT_SUMMARY_FORMAT_VERSION = 2
+
 def delivery_parts_for_style(reply: str, style_value: object, line_chars: int | None = None) -> list[str]:
     text = (reply or "").strip()
     if not text:
@@ -319,6 +321,49 @@ class ContextCompressor:
 
     def _context_summary_cache(self, chat_id: str, context_messages: int) -> dict[str, object]:
         value = self.db.get_setting(f"group_context_summary:{chat_id}", {})
-        if not isinstance(value, dict) or int(value.get("context_messages", 0) or 0) != context_messages:
+        if (
+            not isinstance(value, dict)
+            or _safe_int(value.get("format_version", 0)) != CONTEXT_SUMMARY_FORMAT_VERSION
+            or _safe_int(value.get("context_messages", 0)) != context_messages
+            or _safe_int(value.get("source_last_id", 0)) <= 0
+        ):
             return {}
         return value
+
+    def _schedule_context_compression(
+        self,
+        chat_id: str,
+        context_messages: int,
+        source_items: list[dict[str, object]],
+        cached_summary: dict[str, object],
+    ) -> None:
+        if self.llm is None or not source_items:
+            return
+        previous_summary = str(cached_summary.get("summary") or "").strip()
+        if previous_summary and len(source_items) < CONTEXT_COMPRESSION_REFRESH_MESSAGES:
+            return
+        source_text = self.context.render_compression_source(source_items)
+        if not source_text:
+            return
+        with self._context_compression_lock:
+            if self._context_compression_closed:
+                return
+            finished = [key for key, future in self._context_compression_futures.items() if future.done()]
+            for key in finished:
+                self._context_compression_futures.pop(key, None)
+            current = self._context_compression_futures.get(chat_id)
+            if current is not None and not current.done():
+                return
+            if len(self._context_compression_futures) >= CONTEXT_COMPRESSION_MAX_PENDING_CHATS:
+                LOG.warning("context compression queue full; skipping refresh chat=%s", chat_id)
+                return
+            self._context_compression_futures[chat_id] = self._context_compression_executor.submit(
+                self._run_context_compression,
+                chat_id,
+                context_messages,
+                len(source_items),
+                int(source_items[-1].get("id", 0) or 0),
+                source_text,
+                previous_summary,
+                _safe_int(cached_summary.get("source_count", 0)),
+            )
