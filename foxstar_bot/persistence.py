@@ -12,6 +12,11 @@ from pathlib import Path
 
 from typing import Any, Iterator
 
+MAX_ENABLED_SCHEDULED_TASKS_PER_CHAT = 25
+
+class ScheduledTaskLimitError(RuntimeError):
+    pass
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -217,6 +222,23 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_finance_debug_chat_key_time
                     ON finance_debug_outputs(chat_id, rendered_key, created_at);
+
+                CREATE TABLE IF NOT EXISTS finance_noteboard_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    source_message_id TEXT NOT NULL DEFAULT '',
+                    sender_id TEXT NOT NULL,
+                    sender_name TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL,
+                    numeric_values_json TEXT NOT NULL DEFAULT '[]',
+                    message_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_finance_noteboard_chat_time
+                    ON finance_noteboard_entries(chat_id, message_at, id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_finance_noteboard_source_message
+                    ON finance_noteboard_entries(chat_id, source_message_id)
+                    WHERE source_message_id != '';
                 """
             )
             for statement in (
@@ -283,6 +305,138 @@ class Database:
                 (chat_id, rendered_key),
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def add_finance_noteboard_entry(
+        self,
+        *,
+        chat_id: str,
+        source_message_id: str,
+        sender_id: str,
+        sender_name: str,
+        content: str,
+        numeric_values: list[dict[str, Any]],
+        message_at: str | None = None,
+    ) -> int | None:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO finance_noteboard_entries(
+                    chat_id, source_message_id, sender_id, sender_name, content,
+                    numeric_values_json, message_at, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chat_id,
+                    str(source_message_id or ""),
+                    sender_id,
+                    sender_name,
+                    content,
+                    json.dumps(numeric_values, ensure_ascii=False),
+                    message_at or now,
+                    now,
+                ),
+            )
+            return int(cursor.lastrowid) if cursor.rowcount else None
+
+    def list_finance_noteboard_entries(
+        self,
+        chat_id: str,
+        *,
+        days: int | None = 30,
+        sender: str = "",
+        query: str = "",
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["chat_id = ?"]
+        params: list[Any] = [chat_id]
+        if days is not None:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, int(days)))).isoformat(timespec="seconds")
+            clauses.append("message_at >= ?")
+            params.append(cutoff)
+        if sender.strip():
+            clauses.append("(sender_id = ? OR sender_name = ?)")
+            params.extend([sender.strip(), sender.strip()])
+        if query.strip():
+            clauses.append("content LIKE ?")
+            params.append(f"%{query.strip()}%")
+        params.append(max(1, min(int(limit), 500)))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, source_message_id, sender_id, sender_name, content,
+                       numeric_values_json, message_at, created_at
+                FROM finance_noteboard_entries
+                WHERE {' AND '.join(clauses)}
+                ORDER BY message_at DESC, id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["numeric_values"] = json.loads(str(item.pop("numeric_values_json") or "[]"))
+            except json.JSONDecodeError:
+                item["numeric_values"] = []
+                item.pop("numeric_values_json", None)
+            result.append(item)
+        return result
+
+    def count_finance_noteboard_entries(self, chat_id: str) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS count FROM finance_noteboard_entries WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    def finance_noteboard_backfill_messages(self, chat_id: str, *, limit: int = 20000) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, user_id, content, created_at
+                FROM messages
+                WHERE chat_id = ? AND role = 'user'
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (chat_id, max(1, min(int(limit), 20000))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def add_finance_noteboard_entries_bulk(self, entries: list[dict[str, Any]]) -> int:
+        if not entries:
+            return 0
+        now = utc_now()
+        rows = [
+            (
+                str(entry.get("chat_id") or ""),
+                str(entry.get("source_message_id") or ""),
+                str(entry.get("sender_id") or ""),
+                str(entry.get("sender_name") or ""),
+                str(entry.get("content") or ""),
+                json.dumps(entry.get("numeric_values") or [], ensure_ascii=False),
+                str(entry.get("message_at") or now),
+                now,
+            )
+            for entry in entries
+        ]
+        with self.connect() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO finance_noteboard_entries(
+                    chat_id, source_message_id, sender_id, sender_name, content,
+                    numeric_values_json, message_at, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            return int(conn.total_changes - before)
 
     def record_token_usage(
         self,
@@ -399,9 +553,38 @@ class Database:
         timezone_name: str,
         payload: str,
         next_run_at: str,
-    ) -> int:
+    ) -> tuple[int, bool]:
         now = utc_now()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """
+                SELECT id FROM scheduled_tasks
+                WHERE chat_id = ? AND schedule_type = ? AND COALESCE(cron_expr, '') = ?
+                  AND timezone = ? AND payload = ? AND enabled = 1
+                  AND (? = 'cron' OR next_run_at = ?)
+                ORDER BY id ASC LIMIT 1
+                """,
+                (
+                    chat_id,
+                    schedule_type,
+                    cron_expr or "",
+                    timezone_name,
+                    payload,
+                    schedule_type,
+                    next_run_at,
+                ),
+            ).fetchone()
+            if existing is not None:
+                return int(existing["id"]), False
+            active_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM scheduled_tasks WHERE chat_id = ? AND enabled = 1",
+                (chat_id,),
+            ).fetchone()
+            if int(active_count["count"] or 0) >= MAX_ENABLED_SCHEDULED_TASKS_PER_CHAT:
+                raise ScheduledTaskLimitError(
+                    f"active scheduled task limit reached ({MAX_ENABLED_SCHEDULED_TASKS_PER_CHAT})"
+                )
             cursor = conn.execute(
                 """
                 INSERT INTO scheduled_tasks(
@@ -423,7 +606,7 @@ class Database:
                     now,
                 ),
             )
-            return int(cursor.lastrowid)
+            return int(cursor.lastrowid), True
 
     def list_scheduled_tasks(self, chat_id: str) -> list[dict[str, Any]]:
         with self.connect() as conn:

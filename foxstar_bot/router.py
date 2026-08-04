@@ -274,6 +274,14 @@ def _looks_like_tool_leak(text: str) -> bool:
             return True
     return False
 
+def _scheduled_command_mutates_schedules(payload: str) -> bool:
+    value = " ".join((payload or "").strip().lower().split())
+    if value.startswith("/schedule"):
+        return True
+    if value.startswith(("/gset ", "/groupset ", "/roomset ")):
+        return bool(re.search(r"\s/schedule(?:\s|$)", value))
+    return False
+
 def _safe_int(value: Any) -> int:
     try:
         return int(value)
