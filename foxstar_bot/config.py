@@ -120,6 +120,12 @@ class AppConfig:
     bedrock_api_key: str = ""
     sambanova_api_key: str = ""
     fireworks_api_key: str = ""
+    zai_api_key: str = ""
+    zai_base_url: str = "https://api.z.ai/api/paas/v4/"
+    telnyx_api_key: str = ""
+    telnyx_base_url: str = "https://api.telnyx.com/v2/ai/openai"
+    kimi_api_key: str = ""
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
     log_level: str = "INFO"
     rate_limits: RateLimitConfig = field(default_factory=RateLimitConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)

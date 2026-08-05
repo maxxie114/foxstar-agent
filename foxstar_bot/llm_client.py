@@ -74,6 +74,12 @@ class LLMClient:
         bedrock_api_key: str = "",
         sambanova_api_key: str = "",
         fireworks_api_key: str = "",
+        zai_api_key: str = "",
+        zai_base_url: str = "https://api.z.ai/api/paas/v4/",
+        telnyx_api_key: str = "",
+        telnyx_base_url: str = "https://api.telnyx.com/v2/ai/openai",
+        kimi_api_key: str = "",
+        kimi_base_url: str = "https://api.moonshot.ai/v1",
         usage_recorder: Any | None = None,
     ) -> None:
         if not api_key:
@@ -161,6 +167,21 @@ class LLMClient:
                 max_retries=0,
             )
             if fireworks_api_key
+            else None
+        )
+        self.zai_client = (
+            OpenAI(api_key=zai_api_key, base_url=zai_base_url, timeout=timeout, max_retries=0)
+            if zai_api_key
+            else None
+        )
+        self.telnyx_client = (
+            OpenAI(api_key=telnyx_api_key, base_url=telnyx_base_url, timeout=timeout, max_retries=0)
+            if telnyx_api_key
+            else None
+        )
+        self.kimi_client = (
+            OpenAI(api_key=kimi_api_key, base_url=kimi_base_url, timeout=timeout, max_retries=0)
+            if kimi_api_key
             else None
         )
         self.config = model_config
@@ -258,6 +279,17 @@ class LLMClient:
                 model_name,
                 max_tokens=max_completion_tokens or self.config.max_output_tokens,
                 temperature=temperature,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
+        if resolved_provider in {"zai", "telnyx", "kimi"}:
+            return self._provider_compatible_chat(
+                resolved_provider,
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 timeout=timeout,
                 usage_context=usage_context,
             )
@@ -388,14 +420,15 @@ class LLMClient:
                 provider="fireworks",
                 usage_context=usage_context,
             )
-        if resolved_provider == "sambanova":
+        if resolved_provider in {"sambanova", "zai", "telnyx", "kimi"}:
             return self.chat(
                 messages,
                 max_completion_tokens=max_output_tokens,
                 model=model_name,
                 temperature=temperature,
+                reasoning_effort=reasoning_effort,
                 timeout=timeout,
-                provider="sambanova",
+                provider=resolved_provider,
                 usage_context=usage_context,
             )
         api_timeout = float(timeout or REQUEST_TIMEOUT)
@@ -648,6 +681,18 @@ class LLMClient:
                 tool_handlers,
                 model_name,
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
+                max_tool_rounds=max_tool_rounds,
+                usage_context=usage_context,
+            )
+        if resolved_provider in {"zai", "telnyx", "kimi"}:
+            return self._provider_compatible_chat_with_tools(
+                resolved_provider,
+                messages,
+                tools,
+                tool_handlers,
+                model_name,
+                max_tokens=max_output_tokens or self.config.max_output_tokens,
+                reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
                 usage_context=usage_context,
             )
@@ -1640,6 +1685,41 @@ class LLMClient:
             )
         return content
 
+    def _provider_compatible_chat(
+        self,
+        provider_name: str,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        max_tokens: int,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
+        timeout: float | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        return self._compatible_chat(
+            client=self._provider_compatible_client(provider_name),
+            provider_name=provider_name,
+            messages=messages,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            temperature=None if provider_name == "kimi" else temperature,
+            timeout=timeout,
+            extra_create_kwargs=_provider_reasoning_kwargs(
+                provider_name,
+                model_name,
+                reasoning_effort or self.config.reasoning_effort,
+            ),
+            usage_context=usage_context,
+        )
+
+    def _provider_compatible_client(self, provider_name: str) -> Any:
+        return {
+            "zai": self.zai_client,
+            "telnyx": self.telnyx_client,
+            "kimi": self.kimi_client,
+        }.get(provider_name)
+
     def _fireworks_chat(
         self,
         messages: list[dict[str, Any]],
@@ -2162,6 +2242,8 @@ class LLMClient:
         use_content_parts: bool = False,
         max_tokens_field: str = "max_tokens",
         extra_create_kwargs: dict[str, Any] | None = None,
+        include_temperature: bool = True,
+        include_parallel_tool_calls: bool = True,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if client is None:
@@ -2180,11 +2262,12 @@ class LLMClient:
                 "messages": chat_messages,
                 "tools": chat_tools,
                 "tool_choice": "auto",
-                "parallel_tool_calls": False,
                 "timeout": OPENROUTER_TIMEOUT,
             }
+            if include_parallel_tool_calls:
+                kwargs["parallel_tool_calls"] = False
             kwargs[max_tokens_field] = max_tokens
-            if _model_supports_temperature(model_name):
+            if include_temperature and _model_supports_temperature(model_name):
                 kwargs["temperature"] = self.config.temperature
             if extra_create_kwargs:
                 kwargs.update(extra_create_kwargs)
@@ -2315,8 +2398,46 @@ class LLMClient:
             messages=chat_messages,
             model_name=model_name,
             max_tokens=max_tokens,
-            temperature=self.config.temperature if _model_supports_temperature(model_name) else None,
+            temperature=(
+                self.config.temperature
+                if include_temperature and _model_supports_temperature(model_name)
+                else None
+            ),
             use_content_parts=use_content_parts,
+            max_tokens_field=max_tokens_field,
+            extra_create_kwargs=extra_create_kwargs,
+            usage_context=usage_context,
+        )
+
+    def _provider_compatible_chat_with_tools(
+        self,
+        provider_name: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        tool_handlers: dict[str, Any],
+        model_name: str,
+        *,
+        max_tokens: int,
+        reasoning_effort: str | None = None,
+        max_tool_rounds: int = 5,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        return self._compatible_chat_with_tools(
+            client=self._provider_compatible_client(provider_name),
+            provider_name=provider_name,
+            messages=messages,
+            tools=tools,
+            tool_handlers=tool_handlers,
+            model_name=model_name,
+            max_tokens=max_tokens,
+            max_tool_rounds=max_tool_rounds,
+            extra_create_kwargs=_provider_reasoning_kwargs(
+                provider_name,
+                model_name,
+                reasoning_effort or self.config.reasoning_effort,
+            ),
+            include_temperature=provider_name != "kimi",
+            include_parallel_tool_calls=provider_name != "kimi",
             usage_context=usage_context,
         )
 
@@ -3010,7 +3131,9 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
-    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "bedrock", "fireworks", "sambanova"}:
+    aliases = {"z.ai": "zai", "z-ai": "zai", "moonshot": "kimi", "telnyx-inference": "telnyx"}
+    value = aliases.get(value, value)
+    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "bedrock", "fireworks", "sambanova", "zai", "telnyx", "kimi"}:
         return value
     model_name = (model or "").strip().lower()
     if model_name.startswith("deepseek-"):
@@ -3019,11 +3142,37 @@ def _resolve_provider(provider: str | None, model: str) -> str:
         return "minimax"
     if model_name.startswith("accounts/fireworks/"):
         return "fireworks"
+    if model_name.startswith("glm-"):
+        return "zai"
+    if model_name.startswith(("kimi-", "moonshot-v1-")):
+        return "kimi"
     if "/" in model_name:
         return "openrouter"
     if model_name.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     return "openrouter"
+
+def _provider_reasoning_kwargs(provider: str, model: str, reasoning_effort: str | None) -> dict[str, Any]:
+    effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
+    enabled = bool(effort)
+    if provider == "zai":
+        return {"extra_body": {"thinking": {"type": "enabled" if enabled else "disabled"}}}
+    if provider == "telnyx":
+        return {"extra_body": {"enable_thinking": enabled}}
+    if provider == "kimi":
+        model_name = (model or "").strip().lower()
+        if model_name.startswith("kimi-k3"):
+
+            if effort in {"", "minimal", "low"}:
+                return {"reasoning_effort": "low"}
+            if effort in {"medium", "high"}:
+                return {"reasoning_effort": "high"}
+            return {"reasoning_effort": "max"}
+        if model_name.startswith("kimi-k2.7-code"):
+
+            return {"extra_body": {"thinking": {"type": "enabled"}}}
+        return {"extra_body": {"thinking": {"type": "enabled" if enabled else "disabled"}}}
+    return {}
 
 def _bedrock_model_family(model: str) -> str:
     model_name = (model or "").strip().lower()
