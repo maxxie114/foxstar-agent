@@ -2763,6 +2763,43 @@ class LLMClient:
                 LOG.warning("gemini vision failed, falling back to openai vision: %s", exc)
         return self._analyze_image_openai(image_path, prompt)
 
+    def analyze_image_native(
+        self,
+        image_path: Path,
+        prompt: str,
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+        reasoning_effort: str | None = None,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        from .tool_vision import image_to_data_url
+
+        model_name = _canonicalize_model_name(model or self.config.name)
+        resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
+        LOG.info(
+            "native image analysis request provider=%s model=%s image=%s",
+            resolved_provider,
+            model_name,
+            image_path,
+        )
+        return self.chat(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_to_data_url(image_path)}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+            max_completion_tokens=max(600, min(self.config.max_output_tokens, 8192)),
+            model=model_name,
+            provider=resolved_provider,
+            reasoning_effort=reasoning_effort,
+            usage_context=usage_context,
+        )
+
     def _analyze_image_openai(self, image_path: Path, prompt: str) -> str:
         from .tool_vision import image_to_data_url
 

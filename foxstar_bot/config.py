@@ -40,6 +40,7 @@ class ModelConfig:
     financial_provider: str = "together"
     financial_reasoning_effort: str = "medium"
     financial_verbosity: str = "medium"
+    image_analysis_mode: str = "tool"
     vision_model: str = "gpt-4.1-mini"
     vision_provider: str = "openai"
     gemini_vision_model: str = "gemini-3.1-flash-image-preview"
