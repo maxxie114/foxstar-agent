@@ -270,6 +270,10 @@ class Database:
                 (key, payload),
             )
 
+    def delete_setting(self, key: str) -> None:
+        with self.connect() as conn:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+
     def add_finance_debug_output(
         self,
         *,
