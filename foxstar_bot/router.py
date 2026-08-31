@@ -112,6 +112,37 @@ def _hard_wrap_utf8(text: str, max_bytes: int) -> list[str]:
         out.append("".join(buf))
     return out
 
+COMMAND_REPLY_MAX_PART_BYTES = 3800
+
+def _split_command_reply(text: str, max_bytes: int = COMMAND_REPLY_MAX_PART_BYTES) -> list[str]:
+    value = (text or "").strip()
+    if not value:
+        return []
+    if len(value.encode("utf-8")) <= max_bytes:
+        return [value]
+    parts: list[str] = []
+    current: list[str] = []
+    current_bytes = 0
+    for line in value.split("\n"):
+        line_bytes = len(line.encode("utf-8")) + 1
+        if line_bytes > max_bytes:
+            if current:
+                parts.append("\n".join(current).strip())
+                current, current_bytes = [], 0
+            parts.extend(_hard_wrap_utf8(line, max_bytes))
+            continue
+        if current and current_bytes + line_bytes > max_bytes:
+            parts.append("\n".join(current).strip())
+            current, current_bytes = [], 0
+        current.append(line)
+        current_bytes += line_bytes
+    if current:
+        parts.append("\n".join(current).strip())
+    total = len(parts)
+    if total > 1:
+        parts = [f"[{index}/{total}] {part}" for index, part in enumerate(parts, start=1)]
+    return parts
+
 def _parse_reply_decision(decision: str) -> bool:
     first = (decision or "").strip().split()
     if not first:
