@@ -403,6 +403,19 @@ class Database:
             ).fetchone()
         return int(row["count"] if row else 0)
 
+    def earliest_live_notebook_entry_time(self, chat_id: str) -> str:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MIN(message_at) AS m
+                FROM finance_noteboard_entries
+                WHERE chat_id = ? AND source_message_id != ''
+                  AND source_message_id NOT LIKE 'context:%'
+                """,
+                (chat_id,),
+            ).fetchone()
+        return str(row["m"]) if row and row["m"] else ""
+
     def unclassified_finance_noteboard_entries(self, chat_id: str, *, limit: int = 30) -> list[dict[str, Any]]:
         with self.connect() as conn:
             rows = conn.execute(
