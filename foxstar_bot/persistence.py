@@ -244,6 +244,7 @@ class Database:
             for statement in (
                 "ALTER TABLE memories ADD COLUMN priority INTEGER NOT NULL DEFAULT 50",
                 "ALTER TABLE memories ADD COLUMN source_user_id TEXT",
+                "ALTER TABLE finance_noteboard_entries ADD COLUMN classified INTEGER NOT NULL DEFAULT 0",
             ):
                 try:
                     conn.execute(statement)
@@ -352,9 +353,14 @@ class Database:
         sender: str = "",
         query: str = "",
         limit: int = 100,
+        include_chatter: bool = False,
     ) -> list[dict[str, Any]]:
         clauses = ["chat_id = ?"]
         params: list[Any] = [chat_id]
+        if not include_chatter:
+
+
+            clauses.append("classified != -1")
         if days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, int(days)))).isoformat(timespec="seconds")
             clauses.append("message_at >= ?")
@@ -396,6 +402,31 @@ class Database:
                 (chat_id,),
             ).fetchone()
         return int(row["count"] if row else 0)
+
+    def unclassified_finance_noteboard_entries(self, chat_id: str, *, limit: int = 30) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, sender_name, content
+                FROM finance_noteboard_entries
+                WHERE chat_id = ? AND classified = 0
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (chat_id, max(1, min(int(limit), 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_finance_noteboard_verdicts(self, verdicts: dict[int, int]) -> int:
+        if not verdicts:
+            return 0
+        with self.connect() as conn:
+            before = conn.total_changes
+            conn.executemany(
+                "UPDATE finance_noteboard_entries SET classified = ? WHERE id = ?",
+                [(int(verdict), int(entry_id)) for entry_id, verdict in verdicts.items()],
+            )
+            return int(conn.total_changes - before)
 
     def finance_noteboard_backfill_messages(self, chat_id: str, *, limit: int = 20000) -> list[dict[str, Any]]:
         with self.connect() as conn:
