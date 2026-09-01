@@ -36,6 +36,7 @@ class ModelConfig:
     name: str = "gpt-4.1-mini"
     provider: str = "auto"
     reply_gate_model: str = "gpt-5-nano"
+    reply_gate_fallback_model: str = "z-ai/glm-5.3-flash"
     financial_model: str = "deepseek-ai/DeepSeek-V4-Pro"
     financial_provider: str = "together"
     financial_reasoning_effort: str = "medium"
