@@ -37,8 +37,13 @@ def redact_known_private_ids(text: str, known_ids: list[str] | set[str] | tuple[
     for raw in sorted({str(item or "").strip() for item in known_ids}, key=len, reverse=True):
         if not raw:
             continue
-        value = re.sub(rf"\s*[\(（]\s*{re.escape(raw)}\s*[\)）]", "", value, flags=re.IGNORECASE)
-        value = re.sub(re.escape(raw), "", value, flags=re.IGNORECASE)
+        if len(raw) >= 6:
+            value = re.sub(rf"\s*[\(（]\s*{re.escape(raw)}\s*[\)）]", "", value, flags=re.IGNORECASE)
+            value = re.sub(re.escape(raw), "", value, flags=re.IGNORECASE)
+        else:
+
+
+            value = re.sub(rf"[\(（]\s*{re.escape(raw)}\s*[\)）]", "", value, flags=re.IGNORECASE)
     return _cleanup_redacted_text(value)
 
 
