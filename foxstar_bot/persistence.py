@@ -1052,6 +1052,22 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def close_bug_reports_auto(self, bug_ids: list[int], *, actor: str = "auto-fix") -> list[int]:
+        if not bug_ids:
+            return []
+        now = utc_now()
+        closed: list[int] = []
+        with self.connect() as conn:
+            for bug_id in bug_ids:
+                cursor = conn.execute(
+                    "UPDATE bug_reports SET status = 'closed', closed_at = ?, closed_by = ?, updated_at = ? "
+                    "WHERE id = ? AND status = 'open'",
+                    (now, actor, now, int(bug_id)),
+                )
+                if cursor.rowcount:
+                    closed.append(int(bug_id))
+        return closed
+
     def update_bug_report_status(
         self,
         *,
