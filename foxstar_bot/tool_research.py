@@ -120,12 +120,7 @@ class WebResearchAgent:
         response = requests.post("https://api.exa.ai/search", headers=headers, json=payload, timeout=35.0)
         response.raise_for_status()
         data = response.json()
-        synthesized = str(
-            data.get("output")
-            or data.get("answer")
-            or data.get("text")
-            or ""
-        ).strip()
+        synthesized = _extract_exa_output(data.get("output")) or _extract_exa_output(data.get("answer")) or str(data.get("text") or "").strip()
         results = data.get("results") or []
         sources = "\n".join(
             f"- {item.get('title') or item.get('url')}: {item.get('url')}" for item in results[:6] if item.get("url")
@@ -571,6 +566,22 @@ def _strip_json_fence(text: str) -> str:
         if value.lower().startswith("json"):
             value = value[4:].strip()
     return value
+
+
+def _extract_exa_output(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        return str(value.get("content") or value.get("text") or "").strip()
+    text = str(value).strip()
+    if text.startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return str(parsed.get("content") or parsed.get("text") or "").strip()
+        except json.JSONDecodeError:
+            pass
+    return text
 
 
 def _wants_freshness(query: str) -> bool:

@@ -130,3 +130,24 @@ def test_cascade_exa_deep_first_then_quick_on_failure():
     result = agent.research("test query", chat_id="r")
     assert result.startswith("Exa research result")
     assert calls == ["exa_deep", "exa_quick"]
+
+
+def test_exa_deep_output_unwraps_content_dict():
+    from foxstar_bot.tool_research import WebResearchAgent, _extract_exa_output
+
+    assert _extract_exa_output({"content": "结论A"}) == "结论A"
+
+    assert _extract_exa_output('{"content": "结论B"}') == "结论B"
+
+    assert _extract_exa_output("plain brief") == "plain brief"
+    assert _extract_exa_output(None) == ""
+
+    agent = WebResearchAgent(search=SimpleNamespace(config=_config()), url_fetch=MagicMock(), llm=MagicMock())
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"output": {"content": "干净结论"}, "results": [{"title": "t", "url": "http://x"}]}
+    import foxstar_bot.tool_research as tr
+    with patch.object(tr.requests, "post", return_value=response):
+        result = agent._exa_deep_search("q", run_id="r")
+    assert result.startswith("Exa deep search result:\n干净结论")
+    assert "{'content'" not in result
