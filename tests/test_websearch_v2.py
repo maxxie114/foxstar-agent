@@ -86,3 +86,47 @@ def test_cascade_without_exa_key_falls_to_sonar():
 
     result = agent.research("test query", chat_id="r")
     assert result.startswith("OpenRouter Sonar")
+
+
+def test_exa_deep_search_payload_and_parse():
+    from foxstar_bot.tool_research import WebResearchAgent
+    agent = WebResearchAgent(search=SimpleNamespace(config=_config()), url_fetch=MagicMock(), llm=MagicMock())
+    captured = {}
+    response = MagicMock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {
+        "output": " 合成结论：XYZ。 ",
+        "results": [{"title": "t", "url": "http://x"}],
+    }
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        captured["payload"] = json
+        return response
+
+    import foxstar_bot.tool_research as tr
+    with patch.object(tr.requests, "post", side_effect=fake_post):
+        result = agent._exa_deep_search("研究一下", run_id="r1")
+
+    assert captured["payload"]["type"] == "deep"
+    assert captured["payload"]["outputSchema"] == {"type": "text"}
+    assert "Beijing" in captured["payload"]["systemPrompt"]
+    assert result.startswith("Exa deep search result:")
+    assert "合成结论" in result and "http://x" in result
+
+
+def test_cascade_exa_deep_first_then_quick_on_failure():
+    from foxstar_bot.tool_research import WebResearchAgent
+    agent = WebResearchAgent(search=SimpleNamespace(config=_config(provider="auto")),
+                             url_fetch=MagicMock(), llm=MagicMock())
+    calls = []
+
+    def deep_fail(*a, **k):
+        calls.append("exa_deep")
+        raise RuntimeError("deep timeout")
+
+    agent._exa_deep_search = deep_fail
+    agent._exa_research = lambda *a, **k: calls.append("exa_quick") or "Exa research result: ok"
+
+    result = agent.research("test query", chat_id="r")
+    assert result.startswith("Exa research result")
+    assert calls == ["exa_deep", "exa_quick"]

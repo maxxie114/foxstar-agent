@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+import requests
+
 from .llm_client import LLMClient
 from .tool_search import SearchResult, SearchTool
 from .tool_url import FetchedPage, UrlFetchTool
@@ -55,7 +57,10 @@ class WebResearchAgent:
 
         tiers: list[tuple[str, Any]] = []
         if self.search.config.exa_api_key:
-            tiers.append(("exa", lambda: self._exa_research(research_input, run_id=run_id, chat_id=chat_id, max_pages=max_pages)))
+
+
+            tiers.append(("exa_deep", lambda: self._exa_deep_search(research_input, run_id=run_id, chat_id=chat_id)))
+            tiers.append(("exa_quick", lambda: self._exa_research(research_input, run_id=run_id, chat_id=chat_id, max_pages=max_pages)))
         if self.search.config.openai_api_key:
             tiers.append(("openai_web_search", lambda: self._openai_web_search(research_input, run_id=run_id, chat_id=chat_id)))
         tiers.append(("sonar", lambda: self._openrouter_sonar_search(research_input, run_id=run_id, chat_id=chat_id)))
@@ -68,7 +73,7 @@ class WebResearchAgent:
             "openai": "openai_web_search",
             "openai_web_search": "openai_web_search",
             "web_search": "openai_web_search",
-            "exa": "exa",
+            "exa": "exa_deep",
             "auto": None,
         }.get(provider)
         if preference:
@@ -91,6 +96,55 @@ class WebResearchAgent:
         result = self._deterministic_research(research_input, max_rounds=max_rounds, max_pages=max_pages, run_id=run_id, chat_id=chat_id)
         LOG.info("web_research done run=%s mode=fallback chars=%s", run_id, len(result))
         return result
+
+    def _exa_deep_search(self, query: str, *, run_id: str, chat_id: str = "") -> str:
+        beijing_now = datetime.now(timezone(timedelta(hours=8)))
+        search_type = str(getattr(self.search.config.tools, "exa_deep_search_type", "") or "deep").strip().lower()
+        if search_type not in {"deep", "deep-lite"}:
+            search_type = "deep"
+        headers = {"x-api-key": self.search.config.exa_api_key, "Content-Type": "application/json"}
+        payload = {
+            "query": query,
+            "type": search_type,
+            "outputSchema": {"type": "text"},
+            "systemPrompt": (
+                "You are a web research subagent for a Chinese WeChat group bot. "
+                f"Current time (Beijing): {beijing_now.strftime('%Y-%m-%d %H:%M')}. "
+                "Produce a compact Chinese research brief (English only if the query is English): "
+                "key facts as short bullets, uncertainty and source conflicts called out, "
+                "recency verified for latest/today queries, and cite source names inline. "
+                "Keep it under 300 words so the caller model can integrate it."
+            ),
+        }
+        LOG.info("web_research exa_deep run=%s type=%s query=%r", run_id, search_type, query[:120])
+        response = requests.post("https://api.exa.ai/search", headers=headers, json=payload, timeout=35.0)
+        response.raise_for_status()
+        data = response.json()
+        synthesized = str(
+            data.get("output")
+            or data.get("answer")
+            or data.get("text")
+            or ""
+        ).strip()
+        results = data.get("results") or []
+        sources = "\n".join(
+            f"- {item.get('title') or item.get('url')}: {item.get('url')}" for item in results[:6] if item.get("url")
+        )
+        LOG.info(
+            "web_research exa_deep done run=%s synthesized_chars=%s results=%s",
+            run_id, len(synthesized), len(results),
+        )
+        if not synthesized and not results:
+            raise RuntimeError("exa deep search returned nothing")
+        if not synthesized:
+            raise RuntimeError("exa deep search returned no synthesized output")
+        body = " ".join(synthesized.split())
+        if len(body) > 2600:
+            body = body[:2600].rstrip() + "..."
+        out = f"Exa deep search result:\n{body}"
+        if sources:
+            out += f"\n\nSources:\n{sources}"
+        return out
 
     def _exa_research(self, query: str, *, run_id: str, chat_id: str = "", max_pages: int = 3) -> str:
         beijing_now = datetime.now(timezone(timedelta(hours=8)))
