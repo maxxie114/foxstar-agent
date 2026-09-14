@@ -269,6 +269,20 @@ def _looks_like_tool_leak(text: str) -> bool:
     value = (text or "").strip()
     if not value:
         return False
+    lowered = value.lower()
+
+
+    structural_markers = (
+        "<arg_key>",
+        "<arg_value>",
+        "<tool_call",
+        "</tool_call>",
+        "<|tool_call",
+    )
+    if any(marker in lowered for marker in structural_markers):
+        return True
+    if TERMINAL_REJECT_TOOL_NAME in lowered:
+        return True
     compact = " ".join(value.split())
     tool_names = (
         "reject_response",
@@ -288,7 +302,6 @@ def _looks_like_tool_leak(text: str) -> bool:
     ):
         return True
     if re.fullmatch(r"(?:```(?:json)?\s*)?\{[\s\S]*\}\s*(?:```)?", value, re.IGNORECASE):
-        lowered = compact.lower()
         if any(
             token in lowered
             for token in (
@@ -304,6 +317,24 @@ def _looks_like_tool_leak(text: str) -> bool:
         ):
             return True
     return False
+
+def _extract_leaked_reject_reason(text: str) -> str:
+    value = text or ""
+    match = re.search(
+        rf"{re.escape(TERMINAL_REJECT_TOOL_NAME)}.*?<arg_value>(.*?)</arg_value>",
+        value,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        return " ".join(match.group(1).split())[:160]
+    match = re.search(
+        rf"{re.escape(TERMINAL_REJECT_TOOL_NAME)}\s*\((.*)\)",
+        value,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        return " ".join(match.group(1).split())[:160]
+    return ""
 
 def _scheduled_command_mutates_schedules(payload: str) -> bool:
     value = " ".join((payload or "").strip().lower().split())
