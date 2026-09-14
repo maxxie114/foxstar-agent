@@ -151,3 +151,24 @@ def test_exa_deep_output_unwraps_content_dict():
         result = agent._exa_deep_search("q", run_id="r")
     assert result.startswith("Exa deep search result:\n干净结论")
     assert "{'content'" not in result
+
+
+def test_cascade_exa_agent_first():
+    from foxstar_bot.tool_research import WebResearchAgent
+    agent = WebResearchAgent(search=SimpleNamespace(config=_config()), url_fetch=MagicMock(), llm=MagicMock())
+    calls = []
+    agent._exa_agent_search = lambda *a, **k: calls.append("agent") or "Exa Agent research result: ok"
+    agent._exa_deep_search = lambda *a, **k: calls.append("deep") or ""
+    agent._exa_research = lambda *a, **k: calls.append("quick") or ""
+    result = agent.research("test query", chat_id="r")
+    assert result.startswith("Exa Agent research result")
+    assert calls == ["agent"]
+
+
+def test_exa_agent_falls_through_on_timeout():
+    from foxstar_bot.tool_research import WebResearchAgent
+    agent = WebResearchAgent(search=SimpleNamespace(config=_config()), url_fetch=MagicMock(), llm=MagicMock())
+    agent._exa_agent_search = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("exa agent run timed out"))
+    agent._exa_deep_search = lambda *a, **k: "Exa deep search result: ok"
+    result = agent.research("test query", chat_id="r")
+    assert result.startswith("Exa deep search result")

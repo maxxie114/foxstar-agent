@@ -59,6 +59,7 @@ class WebResearchAgent:
         if self.search.config.exa_api_key:
 
 
+            tiers.append(("exa_agent", lambda: self._exa_agent_search(research_input, run_id=run_id)))
             tiers.append(("exa_deep", lambda: self._exa_deep_search(research_input, run_id=run_id, chat_id=chat_id)))
             tiers.append(("exa_quick", lambda: self._exa_research(research_input, run_id=run_id, chat_id=chat_id, max_pages=max_pages)))
         if self.search.config.openai_api_key:
@@ -73,7 +74,7 @@ class WebResearchAgent:
             "openai": "openai_web_search",
             "openai_web_search": "openai_web_search",
             "web_search": "openai_web_search",
-            "exa": "exa_deep",
+            "exa": "exa_agent",
             "auto": None,
         }.get(provider)
         if preference:
@@ -96,6 +97,71 @@ class WebResearchAgent:
         result = self._deterministic_research(research_input, max_rounds=max_rounds, max_pages=max_pages, run_id=run_id, chat_id=chat_id)
         LOG.info("web_research done run=%s mode=fallback chars=%s", run_id, len(result))
         return result
+
+    _EXA_AGENT_TIMEOUT_SECONDS = 45.0
+
+    def _exa_agent_search(self, query: str, *, run_id: str) -> str:
+        beijing_now = datetime.now(timezone(timedelta(hours=8)))
+        effort = str(getattr(self.search.config.tools, "exa_agent_effort", "") or "minimal").strip().lower()
+        if effort not in {"minimal", "low", "medium"}:
+            effort = "minimal"
+        headers = {"Authorization": f"Bearer {self.search.config.exa_api_key}", "Content-Type": "application/json"}
+        payload = {
+            "query": query,
+            "effort": effort,
+            "systemPrompt": (
+                "You are a web research subagent for a Chinese WeChat group bot. "
+                f"Current time (Beijing): {beijing_now.strftime('%Y-%m-%d %H:%M')}. "
+                "Produce a compact Chinese research brief (English only if the query is English): "
+                "key facts as short bullets, uncertainty and conflicts called out, "
+                "recency verified for latest/today queries, cite source names/URLs inline. "
+                "Keep it under 300 words."
+            ),
+        }
+        LOG.info("web_research exa_agent run=%s effort=%s query=%r", run_id, effort, query[:120])
+        response = requests.post("https://api.exa.ai/agent/runs", headers=headers, json=payload, timeout=30.0)
+        response.raise_for_status()
+        run = response.json()
+        run_id_api = str(run.get("id") or "")
+        if not run_id_api:
+            raise RuntimeError("exa agent run created no id")
+
+        deadline = time.monotonic() + self._EXA_AGENT_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(3.0)
+            status_resp = requests.get(
+                f"https://api.exa.ai/agent/runs/{run_id_api}", headers=headers, timeout=15.0
+            )
+            status_resp.raise_for_status()
+            data = status_resp.json()
+            status = str(data.get("status") or "")
+            if status == "completed":
+                output = (data.get("output") or {})
+                text = _extract_exa_output(output.get("text")) or str(output.get("text") or "").strip()
+                grounding = output.get("grounding") or []
+                cost = data.get("costDollars") or {}
+                total_cost = cost.get("total") if isinstance(cost, dict) else cost
+                LOG.info(
+                    "web_research exa_agent done run=%s cost=%s chars=%s",
+                    run_id, total_cost, len(text),
+                )
+                if not text:
+                    raise RuntimeError("exa agent completed with empty output")
+                body = " ".join(text.split())
+                if len(body) > 2600:
+                    body = body[:2600].rstrip() + "..."
+                sources = "\n".join(
+                    f"- {item.get('title') or item.get('url')}: {item.get('url')}"
+                    for item in grounding[:6]
+                    if isinstance(item, dict) and item.get("url")
+                )
+                out = f"Exa Agent research result:\n{body}"
+                if sources:
+                    out += f"\n\nSources:\n{sources}"
+                return out
+            if status in {"failed", "cancelled"}:
+                raise RuntimeError(f"exa agent run {status}")
+        raise RuntimeError(f"exa agent run timed out after {self._EXA_AGENT_TIMEOUT_SECONDS:.0f}s")
 
     def _exa_deep_search(self, query: str, *, run_id: str, chat_id: str = "") -> str:
         beijing_now = datetime.now(timezone(timedelta(hours=8)))

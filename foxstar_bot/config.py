@@ -28,6 +28,7 @@ class ToolConfig:
     openrouter_web_search_max_output_tokens: int = 3000
     preferred_search_provider: str = "exa"
     exa_search_type: str = "auto"
+    exa_agent_effort: str = "minimal"
     code_execution_enabled: bool = False
 
 
