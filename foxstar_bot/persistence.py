@@ -227,6 +227,20 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_finance_debug_chat_key_time
                     ON finance_debug_outputs(chat_id, rendered_key, created_at);
 
+                CREATE TABLE IF NOT EXISTS agent_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    created_by TEXT NOT NULL DEFAULT '',
+                    instruction TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    progress_note TEXT NOT NULL DEFAULT '',
+                    result TEXT NOT NULL DEFAULT '',
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT ''
+                );
+
                 CREATE TABLE IF NOT EXISTS finance_noteboard_entries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id TEXT NOT NULL,
@@ -444,6 +458,75 @@ class Database:
                 [(int(verdict), int(entry_id)) for entry_id, verdict in verdicts.items()],
             )
             return int(conn.total_changes - before)
+
+    def add_agent_task(self, *, chat_id: str, created_by: str, instruction: str) -> int:
+        now = utc_now()
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO agent_tasks(chat_id, created_by, instruction, status, created_at) "
+                "VALUES(?, ?, ?, 'pending', ?)",
+                (chat_id, created_by, instruction[:4000], now),
+            )
+            return int(cursor.lastrowid)
+
+    def update_agent_task(self, task_id: int, *, status: str | None = None,
+                          progress_note: str | None = None, result: str | None = None,
+                          error: str | None = None) -> None:
+        sets, params = [], []
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+            if status == "running":
+                sets.append("started_at = ?")
+                params.append(utc_now())
+            if status in {"done", "failed", "cancelled"}:
+                sets.append("finished_at = ?")
+                params.append(utc_now())
+        if progress_note is not None:
+            sets.append("progress_note = ?")
+            params.append(progress_note[:1000])
+        if result is not None:
+            sets.append("result = ?")
+            params.append(result[:20000])
+        if error is not None:
+            sets.append("error = ?")
+            params.append(error[:2000])
+        if not sets:
+            return
+        params.append(int(task_id))
+        with self.connect() as conn:
+            conn.execute(f"UPDATE agent_tasks SET {', '.join(sets)} WHERE id = ?", tuple(params))
+
+    def get_agent_task(self, task_id: int) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM agent_tasks WHERE id = ?", (int(task_id),)).fetchone()
+        return dict(row) if row else None
+
+    def list_agent_tasks(self, *, limit: int = 10, status: str = "") -> list[dict[str, Any]]:
+        clauses, params = [], []
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(max(1, min(int(limit), 50)))
+        with self.connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM agent_tasks {where} ORDER BY id DESC LIMIT ?", tuple(params)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def claim_pending_agent_task(self) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_tasks WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE agent_tasks SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending'",
+                (utc_now(), row["id"]),
+            )
+        return dict(row)
 
     def finance_noteboard_backfill_messages(self, chat_id: str, *, limit: int = 20000) -> list[dict[str, Any]]:
         with self.connect() as conn:
