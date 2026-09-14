@@ -359,6 +359,20 @@ def _is_timeout_error(exc: Exception) -> bool:
         current = current.__cause__
     return False
 
+def _looks_like_document_prompt(text: str) -> bool:
+    value = (text or "").strip().lower()
+    if not value:
+        return False
+    doc_words = ("pdf", "docx", ".doc", "附件", "文件", "文档", "论文", "报告", "材料", "合同", "简历")
+    reference_words = ("这个", "这份", "刚才", "刚发", "上面", "那个", "最新", "你刚")
+    action_words = ("分析", "总结", "读一", "看一下", "说了", "讲了", "提取", "翻译", "概括", "重点", "归纳")
+    has_doc = any(word in value for word in doc_words)
+    if not has_doc:
+        return False
+    has_reference = any(word in value for word in reference_words)
+    has_action = any(word in value for word in action_words)
+    return has_reference or has_action
+
 class ContextCompressor:
     def __init__(self, db, llm, config):
         self.db = db
