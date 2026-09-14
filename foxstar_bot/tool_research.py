@@ -1,26 +1,20 @@
 from __future__ import annotations
 
 import json
-
 import logging
-
 import time
-
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
-
 from typing import Any
-
 from uuid import uuid4
 
 from .llm_client import LLMClient
-
 from .tool_search import SearchResult, SearchTool
-
 from .tool_url import FetchedPage, UrlFetchTool
 
 LOG = logging.getLogger(__name__)
-
 AGENTIC_RESEARCH_TIMEOUT_SECONDS = 40.0
+
 
 @dataclass(frozen=True)
 class ResearchPage:
@@ -29,11 +23,156 @@ class ResearchPage:
     text: str
     source: str
 
+
 class WebResearchAgent:
     def __init__(self, search: SearchTool, url_fetch: UrlFetchTool, llm: LLMClient) -> None:
         self.search = search
         self.url_fetch = url_fetch
         self.llm = llm
+
+    def research(self, query: str, *, max_rounds: int = 2, max_pages: int = 5, original_query: str = "", chat_id: str = "") -> str:
+        query = " ".join((query or "").split()).strip()
+        original_query = " ".join((original_query or "").split()).strip()
+        if not query and original_query:
+            query = original_query
+        if not query:
+            return "Web research failed: empty query."
+
+        max_rounds = max(1, min(max_rounds, 2))
+        max_pages = max(1, min(max_pages, 5))
+        run_id = uuid4().hex[:8]
+        provider = (self.search.config.tools.web_research_provider or "openrouter").strip().lower()
+        LOG.info(
+            "web_research start run=%s provider=%s query=%r max_rounds=%s max_pages=%s",
+            run_id,
+            provider,
+            query,
+            max_rounds,
+            max_pages,
+        )
+        research_input = _research_input(query, original_query)
+
+
+        tiers: list[tuple[str, Any]] = []
+        if self.search.config.exa_api_key:
+            tiers.append(("exa", lambda: self._exa_research(research_input, run_id=run_id, chat_id=chat_id, max_pages=max_pages)))
+        if self.search.config.openai_api_key:
+            tiers.append(("openai_web_search", lambda: self._openai_web_search(research_input, run_id=run_id, chat_id=chat_id)))
+        tiers.append(("sonar", lambda: self._openrouter_sonar_search(research_input, run_id=run_id, chat_id=chat_id)))
+        preference = {
+            "openrouter": "sonar",
+            "openrouter_sonar": "sonar",
+            "sonar": "sonar",
+            "sonar_pro": "sonar",
+            "sonar_pro_search": "sonar",
+            "openai": "openai_web_search",
+            "openai_web_search": "openai_web_search",
+            "web_search": "openai_web_search",
+            "exa": "exa",
+            "auto": None,
+        }.get(provider)
+        if preference:
+            tiers.sort(key=lambda item: 0 if item[0] == preference else 1)
+        for tier_name, runner in tiers:
+            try:
+                result = runner()
+                if result.strip():
+                    LOG.info("web_research done run=%s mode=%s chars=%s", run_id, tier_name, len(result))
+                    return result
+            except Exception as exc:
+                LOG.warning("web_research %s failed run=%s; falling back reason=%s", tier_name, run_id, exc)
+        try:
+            result = self._agentic_research(research_input, max_rounds=max_rounds, max_pages=max_pages, run_id=run_id, chat_id=chat_id)
+            if result.strip():
+                LOG.info("web_research done run=%s mode=agentic chars=%s", run_id, len(result))
+                return result
+        except Exception as exc:
+            LOG.warning("web_research agentic loop failed run=%s; falling back reason=%s", run_id, exc)
+        result = self._deterministic_research(research_input, max_rounds=max_rounds, max_pages=max_pages, run_id=run_id, chat_id=chat_id)
+        LOG.info("web_research done run=%s mode=fallback chars=%s", run_id, len(result))
+        return result
+
+    def _exa_research(self, query: str, *, run_id: str, chat_id: str = "", max_pages: int = 3) -> str:
+        beijing_now = datetime.now(timezone(timedelta(hours=8)))
+        fresh_days = 30 if _wants_freshness(query) else None
+        pages: list[ResearchPage] = []
+        queries: list[str] = []
+
+        def exa_search(search_query: str) -> list[ResearchPage]:
+            queries.append(search_query)
+            results = self.search.search(search_query, max_results=6, published_after_days=fresh_days)
+            pages_new: list[ResearchPage] = []
+            for item in results:
+                if not item.url or any(p.url == item.url for p in pages):
+                    continue
+                pages_new.append(ResearchPage(title=item.title, url=item.url, text=item.snippet, source="exa"))
+            pages.extend(pages_new)
+            LOG.info("web_research exa run=%s query=%r fresh_days=%s new_pages=%s total=%s", run_id, search_query, fresh_days, len(pages_new), len(pages))
+            return pages_new
+
+        exa_search(query)
+        if len(pages) < 2 or all(len((p.text or "").strip()) < 300 for p in pages):
+            followup = self._exa_followup(query, pages, run_id)
+            if followup and followup not in queries:
+                exa_search(followup)
+        if not pages:
+            raise RuntimeError("exa returned no usable pages")
+        return self._exa_brief(query, pages, beijing_now)
+
+    def _exa_followup(self, original_query: str, pages: list[ResearchPage], run_id: str) -> str:
+        notes = "\n".join(f"- {p.title}: {p.url}" for p in pages[:6]) or "- (no results)"
+        prompt = (
+            "You are a search query optimizer. The first search returned weak results. "
+            'Return JSON only: {"follow_up_query": "..."} with ONE better query '
+            "(different angle, add context words, or translate Chinese<->English). Empty string if no better idea.\n"
+            f"Original query: {original_query}\nResults so far:\n{notes}"
+        )
+        try:
+            raw = self.llm.responses_text(
+                [{"role": "system", "content": "Return compact valid JSON only."},
+                 {"role": "user", "content": prompt}],
+                max_output_tokens=160,
+                reasoning_effort="low",
+                verbosity="low",
+                timeout=8.0,
+                usage_context={"feature": "web_research"},
+            )
+            value = str(json.loads(_strip_json_fence(raw)).get("follow_up_query") or "").strip()[:180]
+            LOG.info("web_research exa_followup run=%s followup=%r", run_id, value)
+            return value
+        except Exception as exc:
+            LOG.warning("web_research exa followup planning failed run=%s reason=%s", run_id, exc)
+            return ""
+
+    def _exa_brief(self, query: str, pages: list[ResearchPage], beijing_now: datetime) -> str:
+        chosen = pages[:5]
+        notes = "\n\n".join(_page_note(p, limit=1200) for p in chosen)
+        prompt = (
+            "You are a research subagent. Use ONLY the page texts below. "
+            "Write a compact evidence brief (Chinese unless the query is English): "
+            "up to 6 short bullets, facts separated from uncertainty, note conflicts. "
+            "Tie time-sensitive claims to what the pages actually say.\n"
+            f"Current time (Beijing): {beijing_now.strftime('%Y-%m-%d %H:%M')}\n"
+            f"Query: {query}\n\nPages:\n{notes}"
+        )
+        try:
+            answer = self.llm.responses_text(
+                [{"role": "system", "content": "Produce a concise evidence brief."},
+                 {"role": "user", "content": prompt}],
+                max_output_tokens=1800,
+                reasoning_effort="low",
+                verbosity="low",
+                timeout=25.0,
+                usage_context={"feature": "web_research"},
+            )
+        except Exception as exc:
+            LOG.warning("web_research exa synthesis failed reason=%s", exc)
+            answer = "Synthesis failed; raw excerpts follow.\n" + notes[:5000]
+        answer = " ".join((answer or "").strip().split())
+        if len(answer) > 1800:
+            answer = answer[:1800].rstrip() + "..."
+        sources = "\n".join(f"- {p.title or p.url}: {p.url}" for p in chosen)
+        return f"Exa research result:\n{answer}\n\nSources:\n{sources}"
 
     def _openai_web_search(self, query: str, *, run_id: str, chat_id: str = "") -> str:
         model = self.search.config.tools.openai_web_search_model or "gpt-5"
@@ -348,9 +487,11 @@ class WebResearchAgent:
             answer = answer[:1800].rstrip() + "..."
         return f"Web research subagent result:\n{answer}\n\nSources checked:\n{sources}"
 
+
 def _page_note(page: ResearchPage, limit: int) -> str:
     text = " ".join((page.text or "").split())[:limit]
     return f"Title: {page.title}\nURL: {page.url}\nSource: {page.source}\nText: {text}"
+
 
 def _research_input(query: str, original_query: str) -> str:
     query = " ".join((query or "").split()).strip()
@@ -368,6 +509,7 @@ def _research_input(query: str, original_query: str) -> str:
         "When the user asks for latest/current/today/realtime information, verify freshness explicitly, prefer authoritative primary sources, and say if evidence may be stale."
     )
 
+
 def _strip_json_fence(text: str) -> str:
     value = (text or "").strip()
     if value.startswith("```"):
@@ -375,6 +517,14 @@ def _strip_json_fence(text: str) -> str:
         if value.lower().startswith("json"):
             value = value[4:].strip()
     return value
+
+
+def _wants_freshness(query: str) -> bool:
+    value = (query or "").lower()
+    return any(token in value for token in (
+        "最新", "今天", "现在", "刚刚", "新闻", "latest", "today", "current", "recent", "now", "2026", "2025",
+    ))
+
 
 def _research_model(model_name: str) -> str:
     value = (model_name or "").strip()
