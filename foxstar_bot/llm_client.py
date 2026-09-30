@@ -476,6 +476,50 @@ class LLMClient:
             )
         return content
 
+    def reply_gate_json(
+        self,
+        instructions: str,
+        payload: dict[str, Any],
+        *,
+        model: str | None = None,
+        timeout: float = REPLY_GATE_TIMEOUT,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        model = _canonicalize_model_name(model or self.config.reply_gate_model)
+        return self._structured_json_call(
+            "reply_gate",
+            instructions,
+            payload,
+            response_format=_reply_gate_json_schema(),
+            model=model,
+            timeout=float(timeout or REPLY_GATE_TIMEOUT),
+            max_tokens=2000,
+            usage_context=usage_context,
+        )
+
+    def structured_judge_json(
+        self,
+        instructions: str,
+        payload: dict[str, Any],
+        *,
+        schema: dict[str, Any],
+        model: str | None = None,
+        timeout: float = REPLY_GATE_TIMEOUT,
+        max_tokens: int = 2000,
+        usage_context: dict[str, Any] | None = None,
+    ) -> str:
+        model = _canonicalize_model_name(model or self.config.reply_gate_model)
+        return self._structured_json_call(
+            "structured_judge",
+            instructions,
+            payload,
+            response_format=schema,
+            model=model,
+            timeout=float(timeout or REPLY_GATE_TIMEOUT),
+            max_tokens=max_tokens,
+            usage_context=usage_context,
+        )
+
     def web_search(
         self,
         query: str,
