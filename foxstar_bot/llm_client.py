@@ -999,6 +999,16 @@ class LLMClient:
         tier = (service_tier or "").strip().lower()
         if tier in {"default", "flex", "priority", "fast", "ultrafast"}:
             kwargs["service_tier"] = tier
+            if tier in {"priority", "fast", "ultrafast"}:
+
+
+                clamped = min(int(kwargs["max_tokens"] or 0), 8192) or 8192
+                if clamped < int(kwargs["max_tokens"] or 0):
+                    LOG.info(
+                        "service_tier max_tokens clamp model=%s tier=%s %s->%s",
+                        model_name, tier, kwargs["max_tokens"], clamped,
+                    )
+                    kwargs["max_tokens"] = clamped
             LOG.info("service_tier api=openrouter model=%s tier=%s", model_name, tier)
         extra_body = _openrouter_reasoning_extra_body(model_name, reasoning_effort or self.config.reasoning_effort)
         if extra_body:
@@ -1908,7 +1918,9 @@ class LLMClient:
                 **({"service_tier": tier} if tier else {}),
                 "tool_choice": "auto",
                 "parallel_tool_calls": False,
-                "max_tokens": max_tokens,
+
+
+                "max_tokens": min(max_tokens, 8192) if tier in {"priority", "fast", "ultrafast"} else max_tokens,
                 "timeout": OPENROUTER_TIMEOUT,
             }
             if _model_supports_temperature(model_name):
