@@ -65,7 +65,15 @@ class DocumentTool:
         raise ValueError(f"暂不支持这种文档格式：{suffix or 'unknown'}")
 
     def _save_copy(self, path: Path) -> Path:
-        target = self.files_dir / path.name
+
+
+        import hashlib
+        import re as _re
+        safe = _re.sub(r"[^0-9A-Za-z_.\-一-鿿]+", "_", path.stem).strip("_")[:60]
+        suffix = path.suffix.lower()
+        if not safe:
+            safe = hashlib.sha1(str(path).encode("utf-8", "ignore")).hexdigest()[:16]
+        target = self.files_dir / (safe + suffix)
         if path.resolve() != target.resolve():
             shutil.copy2(path, target)
         return target
