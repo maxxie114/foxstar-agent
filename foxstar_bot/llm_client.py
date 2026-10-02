@@ -356,6 +356,7 @@ class LLMClient:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
+        service_tier: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
@@ -459,6 +460,10 @@ class LLMClient:
         retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
         if retention:
             kwargs["prompt_cache_retention"] = retention
+        tier = (service_tier or "").strip().lower()
+        if tier in {"default", "flex", "priority", "fast", "ultrafast"}:
+            kwargs["service_tier"] = tier
+            LOG.info("service_tier api=responses model=%s tier=%s", model_name, tier)
         response = _openai_call_with_retry("responses.create", api_timeout + 2.0, self.client.responses.create, **kwargs)
         _log_prompt_cache_usage("responses.create", model_name, getattr(response, "usage", None))
         self._record_usage(usage_context, api="responses.create", model=model_name, provider="openai", usage=getattr(response, "usage", None))
@@ -767,6 +772,11 @@ class LLMClient:
         try:
             retention = prompt_cache_retention or _default_prompt_cache_retention(model_name)
             tool_rounds = max(1, min(max_tool_rounds, 12))
+            tier = (service_tier or "").strip().lower()
+            if tier in {"default", "flex", "priority", "fast", "ultrafast"}:
+                LOG.info("service_tier api=responses.tools model=%s tier=%s", model_name, tier)
+            else:
+                tier = ""
             failed_tool_signatures: dict[tuple[str, str], int] = {}
             for round_index in range(tool_rounds):
                 kwargs: dict[str, Any] = {
@@ -791,6 +801,8 @@ class LLMClient:
                     kwargs["prompt_cache_key"] = prompt_cache_key
                 if retention:
                     kwargs["prompt_cache_retention"] = retention
+                if tier:
+                    kwargs["service_tier"] = tier
                 LOG.info(
                     "llm_tool_request api=responses model=%s round=%s/%s input_items=%s tools=%s max_output_tokens=%s",
                     model_name,
