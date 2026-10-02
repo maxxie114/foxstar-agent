@@ -201,6 +201,7 @@ class LLMClient:
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
+        service_tier: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
@@ -213,6 +214,7 @@ class LLMClient:
                 temperature=temperature,
                 reasoning_effort=reasoning_effort,
                 timeout=timeout,
+                service_tier=service_tier,
                 usage_context=usage_context,
             )
         if resolved_provider == "deepseek":
@@ -638,6 +640,7 @@ class LLMClient:
         prompt_cache_retention: str | None = None,
         provider: str | None = None,
         max_tool_rounds: int = 5,
+        service_tier: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
@@ -651,6 +654,7 @@ class LLMClient:
                 max_tokens=max_output_tokens or self.config.max_output_tokens,
                 reasoning_effort=reasoning_effort,
                 max_tool_rounds=max_tool_rounds,
+                service_tier=service_tier,
                 usage_context=usage_context,
             )
         if resolved_provider == "deepseek":
@@ -976,6 +980,7 @@ class LLMClient:
         temperature: float | None = None,
         reasoning_effort: str | None = None,
         timeout: float | None = None,
+        service_tier: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.openrouter_client is None:
@@ -989,6 +994,12 @@ class LLMClient:
         }
         if temperature is not None:
             kwargs["temperature"] = temperature
+
+
+        tier = (service_tier or "").strip().lower()
+        if tier in {"default", "flex", "priority", "fast", "ultrafast"}:
+            kwargs["service_tier"] = tier
+            LOG.info("service_tier api=openrouter model=%s tier=%s", model_name, tier)
         extra_body = _openrouter_reasoning_extra_body(model_name, reasoning_effort or self.config.reasoning_effort)
         if extra_body:
             kwargs["extra_body"] = extra_body
@@ -1875,6 +1886,7 @@ class LLMClient:
         max_tokens: int,
         reasoning_effort: str | None = None,
         max_tool_rounds: int = 5,
+        service_tier: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         if self.openrouter_client is None:
@@ -1882,12 +1894,18 @@ class LLMClient:
         chat_messages: list[dict[str, Any]] = [{"role": item["role"], "content": item["content"]} for item in messages]
         chat_tools = [_responses_tool_to_chat_tool(tool) for tool in tools]
         tool_rounds = max(1, min(max_tool_rounds, 12))
+        tier = (service_tier or "").strip().lower()
+        if tier not in {"default", "flex", "priority", "fast", "ultrafast"}:
+            tier = ""
+        else:
+            LOG.info("service_tier api=openrouter.tools model=%s tier=%s", model_name, tier)
         failed_tool_signatures: dict[tuple[str, str], int] = {}
         for round_index in range(tool_rounds):
             kwargs: dict[str, Any] = {
                 "model": model_name,
                 "messages": chat_messages,
                 "tools": chat_tools,
+                **({"service_tier": tier} if tier else {}),
                 "tool_choice": "auto",
                 "parallel_tool_calls": False,
                 "max_tokens": max_tokens,
