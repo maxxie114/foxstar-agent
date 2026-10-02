@@ -3677,7 +3677,9 @@ def _blocked_repeated_failed_tool_call(
 
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
-    if model_name.startswith("gpt-5") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
+    if model_name.startswith("gpt-5") or model_name.startswith("gpt-6") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
+
+
         return False
     return True
 
