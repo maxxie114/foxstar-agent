@@ -31,6 +31,7 @@ class HealthMonitor:
         self.gate_failures = 0
         self._clear_alert("gate_down")
         self._clear_alert("gate_degraded")
+        self._clear_alert("gate_jev_carrying")
 
     def _remember_gate_error(self, entry: str) -> None:
         entry = entry[:160]
@@ -51,6 +52,19 @@ class HealthMonitor:
             f"{entry}\n"
             f"Fallback ({fallback_model or 'unknown'}) is carrying the gate.\n"
             "No action needed unless a DOWN alert follows.",
+        )
+
+    def record_gate_jev_carrying(self, primary_error: str, fallback_error: str) -> None:
+        now = time.time()
+        if now - self.last_gate_degraded_alert < ALERT_COOLDOWN_SECONDS:
+            return
+        self.last_gate_degraded_alert = now
+        self._alert(
+            "gate_jev_carrying",
+            "\u26a0\ufe0f Both gate stages DOWN - Jev last-resort is deciding\n"
+            f"primary: {primary_error[:120]}\n"
+            f"fallback: {fallback_error[:120]}\n"
+            "Bot still replies but on the weakest gate. Fix the root cause above.",
         )
 
     def record_gate_failure(self, reason: str) -> None:
