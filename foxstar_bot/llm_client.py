@@ -73,6 +73,7 @@ class LLMClient:
         minimax_api_key: str = "",
         bedrock_api_key: str = "",
         sambanova_api_key: str = "",
+        cerebras_api_key: str = "",
         fireworks_api_key: str = "",
         zai_api_key: str = "",
         zai_base_url: str = "https://api.z.ai/api/paas/v4/",
@@ -187,6 +188,10 @@ class LLMClient:
         self.config = model_config
         self.gemini_api_key = gemini_api_key
         self.usage_recorder = usage_recorder
+        self.cerebras_client = (
+            OpenAI(api_key=cerebras_api_key, base_url="https://api.cerebras.ai/v1", timeout=timeout, max_retries=0)
+            if cerebras_api_key else None
+        )
 
     def chat(
         self,
@@ -483,6 +488,67 @@ class LLMClient:
             )
         return content
 
+    def _structured_json_call(
+        self,
+        kind: str,
+        instructions: str,
+        payload: dict[str, Any],
+        *,
+        response_format: dict[str, Any],
+        model: str,
+        timeout: float,
+        max_tokens: int,
+        provider: str | None = None,
+        usage_context: dict[str, Any] | None,
+    ) -> str:
+
+
+        if (provider or "").strip().lower() == "cerebras":
+            if self.cerebras_client is None:
+                raise RuntimeError("CEREBRAS_API_KEY is not configured")
+            client, api_provider = self.cerebras_client, "cerebras"
+
+
+        elif "/" in model:
+            if self.openrouter_client is None:
+                raise RuntimeError("OPENROUTER_API_KEY is not configured")
+            client, api_provider = self.openrouter_client, "openrouter"
+        else:
+            if self.sambanova_client is None:
+                raise RuntimeError("SAMBA_NOVA_KEY is not configured")
+            client, api_provider = self.sambanova_client, "sambanova"
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": instructions},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)},
+            ],
+            "max_tokens": int(max_tokens),
+            "temperature": 1,
+            "top_p": 1,
+            "response_format": response_format,
+            "timeout": float(timeout),
+        }
+        response = _call_with_hard_timeout(
+            f"{api_provider}.{kind}",
+            float(timeout) + 2.0,
+            client.chat.completions.create,
+            **kwargs,
+        )
+        _log_prompt_cache_usage(f"{api_provider}.chat.completions", model, getattr(response, "usage", None))
+        self._record_usage(usage_context, api=f"{api_provider}.chat.completions", model=model, provider=api_provider, usage=getattr(response, "usage", None))
+        choice = response.choices[0]
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "%s returned empty content model=%s finish_reason=%s usage=%s",
+                kind,
+                model,
+                getattr(choice, "finish_reason", None),
+                getattr(response, "usage", None),
+            )
+        return content
+
     def reply_gate_json(
         self,
         instructions: str,
@@ -490,6 +556,7 @@ class LLMClient:
         *,
         model: str | None = None,
         timeout: float = REPLY_GATE_TIMEOUT,
+        provider: str | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
         model = _canonicalize_model_name(model or self.config.reply_gate_model)
@@ -501,6 +568,7 @@ class LLMClient:
             model=model,
             timeout=float(timeout or REPLY_GATE_TIMEOUT),
             max_tokens=2000,
+            provider=provider,
             usage_context=usage_context,
         )
 
