@@ -68,14 +68,21 @@ class DocumentTool:
 
 
         import hashlib
+        import os as _os
         import re as _re
+        import stat as _stat
         safe = _re.sub(r"[^0-9A-Za-z_.\-一-鿿]+", "_", path.stem).strip("_")[:60]
         suffix = path.suffix.lower()
         if not safe:
             safe = hashlib.sha1(str(path).encode("utf-8", "ignore")).hexdigest()[:16]
         target = self.files_dir / (safe + suffix)
         if path.resolve() != target.resolve():
+
+
+            if target.exists():
+                _os.chmod(target, _stat.S_IWRITE)
             shutil.copy2(path, target)
+            _os.chmod(target, _stat.S_IWRITE)
         return target
 
     @staticmethod
