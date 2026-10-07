@@ -549,6 +549,21 @@ class LLMClient:
             )
         return content
 
+    def cerebras_text(self, messages: list[dict[str, Any]], *, model: str = "qwen-3.8-27b", max_tokens: int = 4000, timeout: float = 60.0) -> str:
+        if self.cerebras_client is None:
+            raise RuntimeError("CEREBRAS_API_KEY is not configured")
+        response = _call_with_hard_timeout(
+            "cerebras.chat",
+            timeout + 2.0,
+            self.cerebras_client.chat.completions.create,
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            timeout=timeout,
+        )
+        choice = response.choices[0]
+        return (choice.message.content or "").strip()
+
     def reply_gate_json(
         self,
         instructions: str,
