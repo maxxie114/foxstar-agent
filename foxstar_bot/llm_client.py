@@ -562,7 +562,13 @@ class LLMClient:
             timeout=timeout,
         )
         choice = response.choices[0]
-        return (choice.message.content or "").strip()
+        content = (choice.message.content or "").strip()
+        if not content:
+            LOG.warning(
+                "cerebras empty content model=%s finish_reason=%s usage=%s",
+                model, getattr(choice, "finish_reason", None), getattr(response, "usage", None),
+            )
+        return content
 
     def reply_gate_json(
         self,
