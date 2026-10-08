@@ -3341,28 +3341,8 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
         payload["reasoning_content"] = reasoning_content
     return payload
 
-def _resolve_provider(provider: str | None, model: str) -> str:
-    value = (provider or "auto").strip().lower()
-    aliases = {"z.ai": "zai", "z-ai": "zai", "moonshot": "kimi", "telnyx-inference": "telnyx"}
-    value = aliases.get(value, value)
-    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "bedrock", "fireworks", "sambanova", "zai", "telnyx", "kimi"}:
-        return value
-    model_name = (model or "").strip().lower()
-    if model_name.startswith("deepseek-"):
-        return "deepseek"
-    if model_name.startswith("minimax-"):
-        return "minimax"
-    if model_name.startswith("accounts/fireworks/"):
-        return "fireworks"
-    if model_name.startswith("glm-"):
-        return "zai"
-    if model_name.startswith(("kimi-", "moonshot-v1-")):
-        return "kimi"
-    if "/" in model_name:
-        return "openrouter"
-    if model_name.startswith(("gpt-", "o1", "o3", "o4")):
-        return "openai"
-    return "openrouter"
+class ProviderLockError(RuntimeError):
+    pass
 
 def _provider_reasoning_kwargs(provider: str, model: str, reasoning_effort: str | None) -> dict[str, Any]:
     effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
