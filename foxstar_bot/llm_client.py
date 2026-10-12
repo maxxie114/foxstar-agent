@@ -2601,6 +2601,10 @@ class LLMClient:
         max_tool_rounds: int = 5,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
+
+
+        if provider_name in {"zai", "kimi", "minimax"}:
+            model_name = _strip_provider_prefix(model_name)
         return self._compatible_chat_with_tools(
             client=self._provider_compatible_client(provider_name),
             provider_name=provider_name,
