@@ -3345,6 +3345,54 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
         payload["reasoning_content"] = reasoning_content
     return payload
 
+def _resolve_provider(provider: str | None, model: str) -> str:
+    value = (provider or "auto").strip().lower()
+    aliases = {"z.ai": "zai", "z-ai": "zai", "moonshot": "kimi", "telnyx-inference": "telnyx"}
+    value = aliases.get(value, value)
+    if value in {"openai", "openrouter", "deepseek", "together", "lightning", "minimax", "bedrock", "fireworks", "sambanova", "zai", "telnyx", "kimi", "cerebras"}:
+        resolved = value
+    else:
+        model_name = (model or "").strip().lower()
+        if model_name.startswith("deepseek-"):
+            resolved = "deepseek"
+        elif model_name.startswith("minimax-"):
+            resolved = "minimax"
+        elif model_name.startswith("accounts/fireworks/"):
+            resolved = "fireworks"
+        elif model_name.startswith("glm-"):
+            resolved = "zai"
+        elif model_name.startswith(("kimi-", "moonshot-v1-")):
+            resolved = "kimi"
+        elif "/" in model_name:
+            resolved = "openrouter"
+        elif model_name.startswith(("gpt-", "o1", "o3", "o4")):
+            resolved = "openai"
+        else:
+            resolved = "openrouter"
+
+
+    if resolved == "openrouter":
+        m = (model or "").strip().lower()
+        if m.startswith(("z-ai/glm", "zai/glm")) or m.startswith("glm-"):
+            LOG.info(
+                "provider_redirect model=%s openrouter->zai (coding plan, free)",
+                model,
+            )
+            return "zai"
+        if m.startswith(("moonshotai/kimi", "kimi-")):
+            LOG.info(
+                "provider_redirect model=%s openrouter->telnyx (cheaper)",
+                model,
+            )
+            return "telnyx"
+        if m.startswith(("minimax-", "minimaxai/")):
+            LOG.info(
+                "provider_redirect model=%s openrouter->telnyx (cheaper)",
+                model,
+            )
+            return "telnyx"
+    return resolved
+
 def _strip_provider_prefix(model: str) -> str:
     value = (model or "").strip()
     for prefix in ("z-ai/", "zai/", "moonshotai/", "minimaxai/", "openai/", "meta-llama/", "perplexity/"):
