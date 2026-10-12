@@ -1863,6 +1863,10 @@ class LLMClient:
         timeout: float | None = None,
         usage_context: dict[str, Any] | None = None,
     ) -> str:
+
+
+        if provider_name in {"zai", "kimi", "minimax"}:
+            model_name = _strip_provider_prefix(model_name)
         return self._compatible_chat(
             client=self._provider_compatible_client(provider_name),
             provider_name=provider_name,
@@ -3340,6 +3344,13 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
     if reasoning_content:
         payload["reasoning_content"] = reasoning_content
     return payload
+
+def _strip_provider_prefix(model: str) -> str:
+    value = (model or "").strip()
+    for prefix in ("z-ai/", "zai/", "moonshotai/", "minimaxai/", "openai/", "meta-llama/", "perplexity/"):
+        if value.lower().startswith(prefix):
+            return value[len(prefix):]
+    return value
 
 class ProviderLockError(RuntimeError):
     pass
