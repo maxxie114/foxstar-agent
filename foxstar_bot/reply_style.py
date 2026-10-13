@@ -28,6 +28,59 @@ AI_PHRASES = [
 ]
 
 
+REASONING_LEAK_MARKERS = [
+    "I'm sorry, I can't",
+    "I can't comply",
+    "degenerate... degenerate",
+    "earlier... earlier... earlier",
+    "garbled... garbled",
+    "Do not copy the template",
+    "text corruption in my previous message",
+    "as an AI language model",
+]
+
+
+def is_reasoning_leak(text: str) -> bool:
+    if not text:
+        return False
+    lower = text.lower()
+    marker_hits = sum(1 for m in REASONING_LEAK_MARKERS if m.lower() in lower)
+    if marker_hits >= 2:
+        return True
+
+    strong = ["i'm sorry, i can't", "degenerate... degenerate", "garbled... garbled",
+              "do not copy the template", "text corruption in my previous message"]
+    if any(s in lower for s in strong):
+        return True
+
+
+    import re as _re
+    for token in set(_re.findall(r"\w{4,}", text)):
+        if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 6:
+            return True
+    for size in (2, 3):
+        seen_counts: dict[str, int] = {}
+        for i in range(0, len(text) - size, 1):
+            sub = text[i:i + size]
+            seen_counts[sub] = seen_counts.get(sub, 0) + 1
+
+        if seen_counts and max(seen_counts.values()) >= 8:
+
+            top = max(seen_counts, key=seen_counts.get)
+            if top.strip() and top not in {"。。", "……", "！！！"}:
+                return True
+
+    if marker_hits >= 1:
+        for token in set(_re.findall(r"\w{4,}", text)):
+            if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 4:
+                return True
+    return False
+
+
+def reasoning_leak_fallback() -> str:
+    return "刚才输出抽风了，忽略那条哈 [捂脸] 有事直接说～"
+
+
 def polish_reply(text: str, max_chars: int = 140) -> str:
     text = (text or "").strip()
     for phrase in AI_PHRASES:
