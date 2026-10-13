@@ -40,6 +40,21 @@ REASONING_LEAK_MARKERS = [
 ]
 
 
+def is_reasoning_leak_strong(text: str) -> bool:
+    if is_reasoning_leak(text):
+        lower = text.lower()
+        marker_hits = sum(1 for m in REASONING_LEAK_MARKERS if m.lower() in lower)
+        strong = ["i'm sorry, i can't", "degenerate... degenerate", "garbled... garbled",
+                  "do not copy the template", "text corruption in my previous message"]
+        if marker_hits >= 2 or any(x in lower for x in strong):
+            return True
+        import re as _re
+        for token in set(_re.findall(r"\w{4,}", text)):
+            if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 8:
+                return True
+    return False
+
+
 def is_reasoning_leak(text: str) -> bool:
     if not text:
         return False
