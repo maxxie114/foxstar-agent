@@ -131,6 +131,17 @@ class Database:
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_events_chat_time ON chat_events(chat_id, created_at);
 
+                CREATE TABLE IF NOT EXISTS latency_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    msg_id TEXT,
+                    replied INTEGER NOT NULL DEFAULT 0,
+                    total_ms REAL,
+                    stages TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_latency_created ON latency_log(created_at);
+
                 CREATE TABLE IF NOT EXISTS group_member_snapshots (
                     chat_id TEXT NOT NULL,
                     user_id TEXT NOT NULL,

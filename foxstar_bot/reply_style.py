@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 AI_PHRASES = [
     "作为一个AI模型，",
     "作为AI模型，",
@@ -27,7 +26,6 @@ AI_PHRASES = [
     "要详细链接或更多内容？",
 ]
 
-
 REASONING_LEAK_MARKERS = [
     "I'm sorry, I can't",
     "I can't comply",
@@ -38,7 +36,6 @@ REASONING_LEAK_MARKERS = [
     "text corruption in my previous message",
     "as an AI language model",
 ]
-
 
 def is_reasoning_leak_strong(text: str) -> bool:
     if is_reasoning_leak(text):
@@ -53,7 +50,6 @@ def is_reasoning_leak_strong(text: str) -> bool:
             if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 8:
                 return True
     return False
-
 
 def is_reasoning_leak(text: str) -> bool:
     if not text:
@@ -91,10 +87,8 @@ def is_reasoning_leak(text: str) -> bool:
                 return True
     return False
 
-
 def reasoning_leak_fallback() -> str:
     return "刚才输出抽风了，忽略那条哈 [捂脸] 有事直接说～"
-
 
 def polish_reply(text: str, max_chars: int = 140) -> str:
     text = (text or "").strip()
@@ -109,7 +103,6 @@ def polish_reply(text: str, max_chars: int = 140) -> str:
     if end > 8:
         trimmed = trimmed[: end + 1]
     return trimmed
-
 
 def split_reply_messages(
     text: str,
@@ -145,14 +138,12 @@ def split_reply_messages(
         kept.append(overflow)
     return kept[:max_messages]
 
-
 def _normalize_reply_text(text: str) -> str:
     text = (text or "").strip()
     for phrase in AI_PHRASES:
         text = text.replace(phrase, "")
     text = _strip_markdown(text)
     return _normalize_lines(text)
-
 
 def _strip_markdown(text: str) -> str:
     text = re.sub(r"```[\s\S]*?```", "", text)
@@ -164,12 +155,10 @@ def _strip_markdown(text: str) -> str:
     text = text.replace("**", "").replace("###", "").replace("##", "").replace("#", "")
     return text
 
-
 def _normalize_lines(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", "\n", text)
     return text.strip()
-
 
 def _split_sentences(text: str) -> list[str]:
     parts: list[str] = []
@@ -193,7 +182,6 @@ def _split_sentences(text: str) -> list[str]:
         parts.append(tail)
     return parts or [text.strip()]
 
-
 def _merge_standalone_emoji_lines(lines: list[str]) -> list[str]:
     merged: list[str] = []
     for line in lines:
@@ -202,7 +190,6 @@ def _merge_standalone_emoji_lines(lines: list[str]) -> list[str]:
         else:
             merged.append(line)
     return merged
-
 
 def _is_standalone_emoji(text: str) -> bool:
     value = text.strip()
