@@ -3407,6 +3407,14 @@ def _strip_provider_prefix(model: str) -> str:
 class ProviderLockError(RuntimeError):
     pass
 
+def _canonicalize_provider_model(provider: str, model: str) -> str:
+    value = _strip_provider_prefix(model)
+    from .provider_catalog import catalog_lookup
+    hit = catalog_lookup(value)
+    if hit and hit[0] == provider:
+        return hit[1]
+    return value
+
 def _provider_reasoning_kwargs(provider: str, model: str, reasoning_effort: str | None) -> dict[str, Any]:
     effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
     enabled = bool(effort)
