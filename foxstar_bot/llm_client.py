@@ -1,31 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import base64
-
 import json
-
 import logging
-
 import mimetypes
-
 import os
-
 import re
-
 import time
-
 from datetime import datetime, timedelta, timezone
-
 from queue import Empty, Queue
-
 from threading import Thread
-
 from typing import Any
-
 from urllib.parse import quote
-
 from zoneinfo import ZoneInfo
 
 import requests
@@ -33,21 +20,14 @@ import requests
 from .config import ModelConfig
 
 REQUEST_TIMEOUT = 300.0
-
 REPLY_GATE_TIMEOUT = 6.0
-
 RESPONSES_TIMEOUT = 300.0
-
 OPENROUTER_TIMEOUT = 300.0
 
 LOG = logging.getLogger(__name__)
-
 TOOL_TRACE_LOG = logging.getLogger("foxstar_bot.tool_trace")
-
 TESTING_MODE_LOG = logging.getLogger("foxstar_bot.testing_mode")
-
 TERMINAL_REJECT_TOOL_NAME = "_drop_reply_internal"
-
 TOOL_NAME_ALIASES = {
     "reject_response": TERMINAL_REJECT_TOOL_NAME,
     TERMINAL_REJECT_TOOL_NAME: TERMINAL_REJECT_TOOL_NAME,
@@ -57,8 +37,8 @@ TOOL_NAME_ALIASES = {
     "analyze_recent_image": "analyze_recent_image",
     "run_python_code": "run_python_code",
 }
-
 INTERPRETABLE_PLAINTEXT_TOOLS = {TERMINAL_REJECT_TOOL_NAME}
+
 
 class LLMClient:
     def __init__(
@@ -3044,6 +3024,7 @@ class LLMClient:
         LOG.info("gemini vision raw response image=%s chars=%s text=%r", image_path, len(text), text[:1000])
         return text
 
+
 def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: Any, **kwargs: Any) -> Any:
     result: Queue[tuple[bool, Any]] = Queue(maxsize=1)
 
@@ -3062,6 +3043,7 @@ def _call_with_hard_timeout(label: str, hard_timeout: float, func: Any, *args: A
         return value
     raise value
 
+
 def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs: Any) -> Any:
     for attempt in range(2):
         try:
@@ -3073,6 +3055,7 @@ def _openai_call_with_retry(label: str, hard_timeout: float, func: Any, **kwargs
                 continue
             raise
     raise RuntimeError("unreachable OpenAI retry state")
+
 
 def _call_openrouter_chat_completion(label: str, hard_timeout: float, func: Any, kwargs: dict[str, Any]) -> Any:
     try:
@@ -3090,12 +3073,14 @@ def _call_openrouter_chat_completion(label: str, hard_timeout: float, func: Any,
             return _call_with_hard_timeout(label, hard_timeout, func, **retry_kwargs)
         raise
 
+
 def _is_retryable_openai_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if isinstance(status_code, int) and (status_code == 408 or status_code == 409 or status_code == 429 or status_code >= 500):
         return True
     name = exc.__class__.__name__.lower()
     return "timeout" in name or "apierror" in name or "server" in name
+
 
 def _is_unsupported_reasoning_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
@@ -3110,11 +3095,13 @@ def _is_unsupported_reasoning_error(exc: Exception) -> bool:
         return any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid", "not support", "does not support"))
     return "extra_body" in text and any(marker in text for marker in ("unsupported", "unknown", "unrecognized", "invalid"))
 
+
 def _response_incomplete_reason(response: Any) -> str:
     if getattr(response, "status", "") != "incomplete":
         return ""
     details = getattr(response, "incomplete_details", None)
     return str(getattr(details, "reason", "") or "")
+
 
 def _default_prompt_cache_retention(model: str) -> str:
     model_name = (model or "").lower()
@@ -3130,15 +3117,18 @@ def _default_prompt_cache_retention(model: str) -> str:
         return "24h"
     return ""
 
+
 def _california_time_context() -> str:
     now = datetime.now(_california_tz())
     return f"California time is {now.strftime('%Y-%m-%d %H:%M:%S %Z')} (ISO: {now.isoformat()})"
+
 
 def _california_tz() -> timezone:
     try:
         return ZoneInfo("America/Los_Angeles")
     except Exception:
         return timezone(timedelta(hours=-7), "America/Los_Angeles")
+
 
 def _compact_json(value: Any, limit: int = 900) -> str:
     if isinstance(value, str):
@@ -3152,6 +3142,7 @@ def _compact_json(value: Any, limit: int = 900) -> str:
     if len(text) > limit:
         return text[:limit].rstrip() + "..."
     return text
+
 
 def _tool_trace(
     *,
@@ -3179,6 +3170,7 @@ def _tool_trace(
         TOOL_TRACE_LOG.info(json.dumps(record, ensure_ascii=False, default=str))
     except Exception:
         TOOL_TRACE_LOG.info(str(record))
+
 
 def _testing_trace_response(
     *,
@@ -3220,8 +3212,10 @@ def _testing_trace_response(
     except Exception:
         TESTING_MODE_LOG.info(str(record))
 
+
 def _is_testing_usage_context(usage_context: dict[str, Any] | None) -> bool:
     return str((usage_context or {}).get("feature") or "").strip().lower() == "main_reply_testing_mode"
+
 
 def _testing_trace_sanitize_request_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
@@ -3233,6 +3227,7 @@ def _testing_trace_sanitize_request_kwargs(kwargs: dict[str, Any]) -> dict[str, 
             continue
         safe[key] = _safe_model_dump(value)
     return safe
+
 
 def _safe_model_dump(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -3253,6 +3248,7 @@ def _safe_model_dump(value: Any) -> Any:
             pass
     return str(value)
 
+
 def _render_tool_outputs(input_items: list[Any], limit: int = 3500) -> str:
     outputs: list[str] = []
     for item in input_items:
@@ -3267,6 +3263,7 @@ def _render_tool_outputs(input_items: list[Any], limit: int = 3500) -> str:
     if len(text) > limit:
         text = text[:limit].rstrip() + "..."
     return text
+
 
 def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
     citations: list[dict[str, str]] = []
@@ -3284,6 +3281,7 @@ def _response_url_citations(output_items: list[Any]) -> list[dict[str, str]]:
                     }
                 )
     return citations
+
 
 def _chat_messages_for_provider(
     messages: list[dict[str, Any]],
@@ -3307,6 +3305,7 @@ def _chat_messages_for_provider(
         rendered.append(payload)
     return rendered
 
+
 def _collapse_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     system_parts: list[str] = []
     collapsed: list[dict[str, Any]] = []
@@ -3321,12 +3320,14 @@ def _collapse_system_messages(messages: list[dict[str, Any]]) -> list[dict[str, 
         return list(messages)
     return [{"role": "system", "content": "\n\n".join(system_parts)}] + collapsed
 
+
 def _provider_text_content(content: Any, use_content_parts: bool) -> Any:
     if not use_content_parts:
         return content
     if isinstance(content, list):
         return content
     return [{"type": "text", "text": str(content or "")}]
+
 
 def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -3348,6 +3349,7 @@ def _assistant_tool_message(message: Any, *, use_content_parts: bool = False) ->
     if reasoning_content:
         payload["reasoning_content"] = reasoning_content
     return payload
+
 
 def _resolve_provider(provider: str | None, model: str) -> str:
     value = (provider or "auto").strip().lower()
@@ -3397,6 +3399,7 @@ def _resolve_provider(provider: str | None, model: str) -> str:
             return "telnyx"
     return resolved
 
+
 def _strip_provider_prefix(model: str) -> str:
     value = (model or "").strip()
     for prefix in ("z-ai/", "zai/", "moonshotai/", "minimaxai/", "openai/", "meta-llama/", "perplexity/"):
@@ -3404,8 +3407,10 @@ def _strip_provider_prefix(model: str) -> str:
             return value[len(prefix):]
     return value
 
+
 class ProviderLockError(RuntimeError):
     pass
+
 
 def _canonicalize_provider_model(provider: str, model: str) -> str:
     value = _strip_provider_prefix(model)
@@ -3414,6 +3419,7 @@ def _canonicalize_provider_model(provider: str, model: str) -> str:
     if hit and hit[0] == provider:
         return hit[1]
     return value
+
 
 def _provider_reasoning_kwargs(provider: str, model: str, reasoning_effort: str | None) -> dict[str, Any]:
     effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
@@ -3437,6 +3443,7 @@ def _provider_reasoning_kwargs(provider: str, model: str, reasoning_effort: str 
         return {"extra_body": {"thinking": {"type": "enabled" if enabled else "disabled"}}}
     return {}
 
+
 def _bedrock_model_family(model: str) -> str:
     model_name = (model or "").strip().lower()
     if model_name.startswith("anthropic."):
@@ -3444,6 +3451,7 @@ def _bedrock_model_family(model: str) -> str:
     if model_name.startswith("openai."):
         return "openai"
     return "compat"
+
 
 def _bedrock_region_for_model(model: str) -> str:
     model_name = (model or "").strip().lower()
@@ -3453,6 +3461,7 @@ def _bedrock_region_for_model(model: str) -> str:
     if model_name.startswith("anthropic."):
         return (os.environ.get("BEDROCK_ANTHROPIC_REGION") or global_region or "us-east-1").strip()
     return (os.environ.get("BEDROCK_COMPAT_REGION") or global_region or "us-east-1").strip()
+
 
 def _normalize_reasoning_effort(value: str | None, *, preserve_max: bool = False) -> str:
     effort = (value or "").strip().lower()
@@ -3470,6 +3479,7 @@ def _normalize_reasoning_effort(value: str | None, *, preserve_max: bool = False
     }
     return aliases.get(effort, effort)
 
+
 def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str, Any]:
     normalized = _normalize_reasoning_effort(effort, preserve_max=True)
     if not normalized:
@@ -3482,6 +3492,7 @@ def _openrouter_reasoning_extra_body(model: str, effort: str | None) -> dict[str
         payload = {"max_tokens": _reasoning_budget_for_effort(normalized), "exclude": True}
     return {"reasoning": payload}
 
+
 def _normalize_deepseek_reasoning_effort(value: str | None) -> str:
     effort = _normalize_reasoning_effort(value, preserve_max=True)
     if effort in {"", "none"}:
@@ -3492,12 +3503,15 @@ def _normalize_deepseek_reasoning_effort(value: str | None) -> str:
         return "max"
     return "high"
 
+
 def _deepseek_thinking_enabled(value: str | None) -> bool:
     effort = (value or "").strip().lower()
     return effort not in {"", "none", "off", "false", "0", "clear", "default"}
 
+
 def _deepseek_extra_body(reasoning_effort: str | None) -> dict[str, Any]:
     return {"thinking": {"type": "enabled" if _deepseek_thinking_enabled(reasoning_effort) else "disabled"}}
+
 
 def _together_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
     effort = _normalize_reasoning_effort(reasoning_effort, preserve_max=True)
@@ -3509,6 +3523,7 @@ def _together_reasoning_kwargs(reasoning_effort: str | None) -> dict[str, Any]:
             "reasoning": {"enabled": True},
         },
     }
+
 
 def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -3533,6 +3548,7 @@ def _deepseek_assistant_message_dict(message: Any) -> dict[str, Any]:
         ]
     return payload
 
+
 def _message_reasoning_content(message: Any) -> Any:
     direct = getattr(message, "reasoning_content", None)
     if direct:
@@ -3556,6 +3572,7 @@ def _message_reasoning_content(message: Any) -> Any:
         return dumped.get("reasoning_content") or dumped.get("reasoning")
     return None
 
+
 def _reply_gate_json_schema() -> dict[str, Any]:
     return {
         "type": "json_schema",
@@ -3577,6 +3594,7 @@ def _reply_gate_json_schema() -> dict[str, Any]:
         },
     }
 
+
 def _openrouter_prefers_reasoning_budget(model: str) -> bool:
 
 
@@ -3586,6 +3604,7 @@ def _openrouter_prefers_reasoning_budget(model: str) -> bool:
         return False
     return "claude-3.7" in model or "claude-3-7" in model or "claude-sonnet-4.5" in model or "claude-4.5" in model
 
+
 def _reasoning_budget_for_effort(effort: str) -> int:
     if effort == "low":
         return 1024
@@ -3594,6 +3613,7 @@ def _reasoning_budget_for_effort(effort: str) -> int:
     if effort == "max":
         return 12288
     return 8192
+
 
 def _response_trace_id(response: Any) -> str:
     trace_id = str(getattr(response, "id", "") or "")
@@ -3612,6 +3632,7 @@ def _response_trace_id(response: Any) -> str:
             return ""
     return ""
 
+
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "function",
@@ -3622,12 +3643,14 @@ def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
+
 def _responses_tool_to_anthropic_tool(tool: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": tool.get("name", ""),
         "description": tool.get("description", ""),
         "input_schema": tool.get("parameters", {"type": "object", "properties": {}}),
     }
+
 
 def _bedrock_anthropic_prompt(messages: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
     collapsed = _collapse_system_messages(messages)
@@ -3643,12 +3666,14 @@ def _bedrock_anthropic_prompt(messages: list[dict[str, Any]]) -> tuple[str, list
         prompt_messages.append({"role": role, "content": str(item.get("content", "") or "")})
     return system_text, prompt_messages
 
+
 def _bedrock_anthropic_text(body: dict[str, Any]) -> str:
     parts: list[str] = []
     for item in list(body.get("content") or []):
         if isinstance(item, dict) and item.get("type") == "text" and item.get("text"):
             parts.append(str(item.get("text")))
     return "".join(parts).strip()
+
 
 def _handle_plaintext_tool_call(content: str, tool_handlers: dict[str, Any]) -> dict[str, Any] | None:
     text = (content or "").strip()
@@ -3668,6 +3693,7 @@ def _handle_plaintext_tool_call(content: str, tool_handlers: dict[str, Any]) -> 
         return handler(**args)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
+
 
 def _parse_plaintext_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
     value = text.strip()
@@ -3696,12 +3722,81 @@ def _parse_plaintext_tool_call(text: str) -> tuple[str, dict[str, Any]] | None:
         args = {}
     return name, args if isinstance(args, dict) else {}
 
+
 def _candidate_json_payloads(text: str) -> list[str]:
     payloads = [text]
     match = re.search(r"(\{[\s\S]*\})", text)
     if match and match.group(1) != text:
         payloads.append(match.group(1))
     return payloads
+
+
+def _sanitize_provider_content(content: str, *, provider_name: str = "") -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    cleaned = re.sub(
+        r"<[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>[\s\S]*?</[^>\n]*DSML[^>\n]*tool_calls[^>\n]*>",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    if cleaned != text:
+        LOG.warning("provider_tool_markup_stripped content_preview=%r", text[:300])
+    if provider_name == "minimax" or "思维链" in cleaned or "分析用户" in cleaned:
+        cleaned = _sanitize_leaked_reasoning(cleaned, provider_name=provider_name)
+    return cleaned
+
+
+def _sanitize_leaked_reasoning(content: str, *, provider_name: str = "") -> str:
+    text = (content or "").strip()
+    if not text:
+        return ""
+    stripped_tags = re.sub(r"(?is)<think>[\s\S]*?</think>", "", text).strip()
+    if stripped_tags != text:
+        LOG.warning("provider_think_tag_stripped content_preview=%r", text[:300])
+        text = stripped_tags
+    meta_prefix = re.match(
+        r"(?is)^(the user (says|asks)|the assistant should|we (need|must|should)|"
+        r"let'?s think|this is a simple request|思维链|分析用户|检查规则|好的，用户)",
+        text,
+    )
+    if not meta_prefix:
+        return text
+    parts = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+    if len(parts) < 2:
+        return text
+
+    tail = ""
+    for part in reversed(parts):
+        if not re.match(r"(?is)^(思维链|分析用户|分析《|分析这|检查规则|好的，用户|the user|the assistant|we |let'?s think|this is)", part):
+            tail = part
+            break
+    if tail and len(tail) <= 400:
+        LOG.warning(
+            "reasoning_leak_suppressed provider=%s head=%r tail=%r",
+            provider_name, text[:200], tail[:200],
+        )
+        return tail
+
+
+    tail = parts[-1]
+    meta_line = re.compile(
+        r"(?is)^(思维链|分析用户|分析《|分析这|检查规则|好的，用户|the user|the assistant|"
+        r"we |let'?s think|this is|1句话|200字|有没有|喵的数量|表情符号|let'?s refine)[：:？?]?\s*"
+    )
+    clean_lines = []
+    for line in tail.splitlines():
+        stripped = meta_line.sub("", line.strip(), count=1)
+        clean_lines.append(stripped)
+    result = "\n".join(c for c in clean_lines if c).strip()
+    LOG.warning(
+        "reasoning_leak_full_block provider=%s - all paragraphs are meta-text, cleaned to %r",
+        provider_name, result[:120],
+    )
+    return result if result else tail
+    return text
+
 
 def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
     try:
@@ -3721,8 +3816,10 @@ def _parse_tool_call_json(payload: str) -> tuple[str, dict[str, Any]] | None:
         return None
     return name, args if isinstance(args, dict) else {}
 
+
 def _canonical_tool_name(name: str) -> str:
     return TOOL_NAME_ALIASES.get((name or "").strip(), "")
+
 
 def _canonicalize_model_name(model: str) -> str:
     value = (model or "").strip()
@@ -3737,6 +3834,7 @@ def _canonicalize_model_name(model: str) -> str:
         return lowered
     return value
 
+
 def _together_openrouter_fallback_model(model: str) -> str:
     value = (model or "").strip()
     lowered = value.lower()
@@ -3747,6 +3845,7 @@ def _together_openrouter_fallback_model(model: str) -> str:
         "deepseek-v4-flash": "deepseek/deepseek-v4-flash",
     }
     return mapping.get(lowered, value)
+
 
 def _should_fallback_together_error(exc: Exception, fallback_model: str, openrouter_client: Any) -> bool:
     if openrouter_client is None:
@@ -3770,6 +3869,7 @@ def _should_fallback_together_error(exc: Exception, fallback_model: str, openrou
         return False
     return bool(fallback_model)
 
+
 def _tool_failure_signature(name: str, args: dict[str, Any], result: Any) -> tuple[str, str] | None:
     if not isinstance(result, dict):
         return None
@@ -3785,6 +3885,7 @@ def _tool_failure_signature(name: str, args: dict[str, Any], result: Any) -> tup
         error = "non_ok"
     return ((name or "").strip(), f"{args_sig}|{error}")
 
+
 def _remember_failed_tool_signature(
     failed_tool_signatures: dict[tuple[str, str], int],
     name: str,
@@ -3795,6 +3896,7 @@ def _remember_failed_tool_signature(
     if signature is None:
         return
     failed_tool_signatures[signature] = failed_tool_signatures.get(signature, 0) + 1
+
 
 def _blocked_repeated_failed_tool_call(
     failed_tool_signatures: dict[tuple[str, str], int],
@@ -3815,6 +3917,7 @@ def _blocked_repeated_failed_tool_call(
             }
     return None
 
+
 def _model_supports_temperature(model: str) -> bool:
     model_name = (model or "").lower()
     if model_name.startswith("gpt-5") or model_name.startswith("gpt-6") or model_name.startswith("o1") or model_name.startswith("o3") or model_name.startswith("o4"):
@@ -3822,6 +3925,7 @@ def _model_supports_temperature(model: str) -> bool:
 
         return False
     return True
+
 
 def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
     if usage is None:
@@ -3836,6 +3940,7 @@ def _log_prompt_cache_usage(api: str, model: str, usage: Any) -> None:
         return
     LOG.debug("prompt_cache api=%s model=%s cached_tokens=%s input_tokens=%s", api, model, cached or 0, total or 0)
 
+
 def _usage_totals(usage: Any) -> tuple[int, int, int]:
     input_tokens = _usage_value(usage, "prompt_tokens")
     if input_tokens is None:
@@ -3848,6 +3953,7 @@ def _usage_totals(usage: Any) -> tuple[int, int, int]:
         cached_tokens = _usage_nested_value(usage, "input_tokens_details", "cached_tokens")
     return int(input_tokens or 0), int(output_tokens or 0), int(cached_tokens or 0)
 
+
 def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     parent_value = _usage_value(usage, parent)
     if parent_value is None:
@@ -3857,6 +3963,7 @@ def _usage_nested_value(usage: Any, parent: str, child: str) -> int | None:
     else:
         value = getattr(parent_value, child, None)
     return value if isinstance(value, int) else None
+
 
 def _usage_value(usage: Any, key: str) -> Any:
     if isinstance(usage, dict):
