@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+
 AI_PHRASES = [
     "作为一个AI模型，",
     "作为AI模型，",
@@ -26,6 +27,7 @@ AI_PHRASES = [
     "要详细链接或更多内容？",
 ]
 
+
 REASONING_LEAK_MARKERS = [
     "I'm sorry, I can't",
     "I can't comply",
@@ -36,6 +38,51 @@ REASONING_LEAK_MARKERS = [
     "text corruption in my previous message",
     "as an AI language model",
 ]
+
+
+def _has_reasoning_chain_shape(text: str) -> bool:
+    import re as _re
+    if len(text) < 200:
+        return False
+    cjk = len(_re.findall(r"[一-鿿]", text))
+    eng = set(m.lower() for m in _re.findall(r"[a-zA-Z]{3,}", text))
+    has_meta_en = bool(eng & {"let", "refine", "check", "analysis", "context", "format", "rules"})
+    has_meta_cjk = any(k in text for k in ("思维链", "分析用户", "检查规则", "要求：", "符合。"))
+    paras = [p for p in text.split(chr(10) * 2) if p.strip()]
+    has_paras = len(paras) >= 2
+    return (cjk > 50 or len(text) > 300) and has_paras and (has_meta_en or has_meta_cjk)
+
+
+def looks_degenerate_heuristic(text: str) -> bool:
+    if not text or len(text) < 200:
+        return False
+    lower = text.lower()
+    if any(m.lower() in lower for m in REASONING_LEAK_MARKERS):
+        return True
+
+    if "sorry" in lower and ("cannot" in lower or "can't" in lower):
+        return True
+    import re as _re
+    for token in set(_re.findall(r"[a-zA-Z]{5,}", text)):
+        if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 5:
+            return True
+
+    if _re.search(r"(.)\1{20,}", text):
+        return True
+
+
+    if _has_reasoning_chain_shape(text):
+        return True
+    if len(text) >= 200:
+        cjk = len(_re.findall(r"[一-鿿]", text))
+        eng_words = set(m.lower() for m in _re.findall(r"[a-zA-Z]{3,}", text))
+        has_meta = bool(eng_words & {"let", "refine", "check", "analysis", "context", "format", "rules"})
+        has_meta = has_meta or any(k in text for k in ("思维链", "分析用户", "分析《", "检查规则", "检查：", "要求：", "符合。"))
+        paragraphs = [p for p in text.split(chr(10) * 2) if p.strip()]
+        if cjk > 50 and bool(eng_words) and len(paragraphs) >= 2 and has_meta:
+            return True
+    return False
+
 
 def is_reasoning_leak_strong(text: str) -> bool:
     if is_reasoning_leak(text):
@@ -50,6 +97,7 @@ def is_reasoning_leak_strong(text: str) -> bool:
             if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 8:
                 return True
     return False
+
 
 def is_reasoning_leak(text: str) -> bool:
     if not text:
@@ -87,8 +135,10 @@ def is_reasoning_leak(text: str) -> bool:
                 return True
     return False
 
+
 def reasoning_leak_fallback() -> str:
     return "刚才输出抽风了，忽略那条哈 [捂脸] 有事直接说～"
+
 
 def polish_reply(text: str, max_chars: int = 140) -> str:
     text = (text or "").strip()
@@ -103,6 +153,7 @@ def polish_reply(text: str, max_chars: int = 140) -> str:
     if end > 8:
         trimmed = trimmed[: end + 1]
     return trimmed
+
 
 def split_reply_messages(
     text: str,
@@ -138,12 +189,14 @@ def split_reply_messages(
         kept.append(overflow)
     return kept[:max_messages]
 
+
 def _normalize_reply_text(text: str) -> str:
     text = (text or "").strip()
     for phrase in AI_PHRASES:
         text = text.replace(phrase, "")
     text = _strip_markdown(text)
     return _normalize_lines(text)
+
 
 def _strip_markdown(text: str) -> str:
     text = re.sub(r"```[\s\S]*?```", "", text)
@@ -155,10 +208,12 @@ def _strip_markdown(text: str) -> str:
     text = text.replace("**", "").replace("###", "").replace("##", "").replace("#", "")
     return text
 
+
 def _normalize_lines(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{2,}", "\n", text)
     return text.strip()
+
 
 def _split_sentences(text: str) -> list[str]:
     parts: list[str] = []
@@ -182,6 +237,7 @@ def _split_sentences(text: str) -> list[str]:
         parts.append(tail)
     return parts or [text.strip()]
 
+
 def _merge_standalone_emoji_lines(lines: list[str]) -> list[str]:
     merged: list[str] = []
     for line in lines:
@@ -190,6 +246,7 @@ def _merge_standalone_emoji_lines(lines: list[str]) -> list[str]:
         else:
             merged.append(line)
     return merged
+
 
 def _is_standalone_emoji(text: str) -> bool:
     value = text.strip()
