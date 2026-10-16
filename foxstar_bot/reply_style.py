@@ -64,7 +64,7 @@ def looks_degenerate_heuristic(text: str) -> bool:
         return True
     import re as _re
     for token in set(_re.findall(r"[a-zA-Z]{5,}", text)):
-        if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 5:
+        if len(list(_re.finditer(_re.escape(token), text, _re.IGNORECASE))) >= 10:
             return True
 
     if _re.search(r"(.)\1{20,}", text):
