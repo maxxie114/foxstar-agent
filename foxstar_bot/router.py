@@ -373,6 +373,15 @@ def _looks_like_document_prompt(text: str) -> bool:
     has_action = any(word in value for word in action_words)
     return has_reference or has_action
 
+def _explicit_background_task_request(text: str) -> bool:
+    value = (text or "").strip().lower()
+    if not value or value.startswith("/"):
+        return False
+    action = r"(?:调查|核查|核实|研究|深挖|分析|查(?:一下|一查|清楚)?|搜索|检索|搜集|整理|写(?:个|份)?报告|做(?:个|份)?报告|看看|看一下|research|investigate|analy[sz]e|verify|check|look\s+into|write\s+(?:a\s+)?report)"
+    leading_request = rf"^(?:(?:@\S+\s+)?(?:请|麻烦|帮我|帮忙|你能不能|能不能|能否|可不可以|可以|给我|替我|去)\s*)*{action}"
+    embedded_request = rf"(?:请|麻烦|帮我|帮忙|你能不能|能不能|能否|可不可以|可以帮我|给我|替我|我想|我要|需要).{{0,20}}{action}"
+    return bool(re.search(leading_request, value) or re.search(embedded_request, value))
+
 class ContextCompressor:
     def __init__(self, db, llm, config):
         self.db = db

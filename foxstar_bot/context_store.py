@@ -56,6 +56,91 @@ class ContextStore:
             rendered.append(f"{role}: {content}")
         return rendered
 
+    def compression_window(
+        self,
+        chat_id: str,
+        max_turns: int | None = None,
+        compression_turns: int = CONTEXT_COMPRESSION_MESSAGES,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], str]:
+        recent_limit = self.max_turns if max_turns is None else normalize_context_messages(max_turns)
+        compression_limit = max(0, min(int(compression_turns), CONTEXT_COMPRESSION_MESSAGES))
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                "SELECT id, user_id, role, content, kind, created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, recent_limit + compression_limit),
+            ).fetchall()
+        items = [dict(row) for row in reversed(rows)]
+        items = [item for item in items if not self._is_suppressed(chat_id, item)]
+        if len(items) <= recent_limit:
+            return [], items, ""
+        older = items[:-recent_limit]
+        recent = items[-recent_limit:]
+        signature = f"{older[0]['id']}:{older[-1]['id']}:{len(older)}"
+        return older, recent, signature
+
+    def rolling_window(
+        self,
+        chat_id: str,
+        *,
+        max_turns: int | None = None,
+        summarized_through_id: int = 0,
+        compression_limit: int = CONTEXT_COMPRESSION_MESSAGES,
+        bridge_limit: int = CONTEXT_BRIDGE_MESSAGES,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+        recent_limit = self.max_turns if max_turns is None else normalize_context_messages(max_turns)
+        compression_limit = max(1, min(int(compression_limit), CONTEXT_COMPRESSION_MESSAGES))
+        bridge_limit = max(1, min(int(bridge_limit), CONTEXT_BRIDGE_MESSAGES))
+        with self.db.connect() as conn:
+            recent_rows = conn.execute(
+                "SELECT id, user_id, role, content, kind, created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+                (chat_id, recent_limit),
+            ).fetchall()
+            recent = [dict(row) for row in reversed(recent_rows)]
+            recent = [item for item in recent if not self._is_suppressed(chat_id, item)]
+            if not recent:
+                return [], [], []
+            recent_first_id = int(recent[0]["id"])
+            if summarized_through_id > 0:
+                source_rows = conn.execute(
+                    """
+                    SELECT id, user_id, role, content, kind, created_at FROM messages
+                    WHERE chat_id = ? AND id > ? AND id < ?
+                    ORDER BY id ASC LIMIT ?
+                    """,
+                    (chat_id, summarized_through_id, recent_first_id, compression_limit),
+                ).fetchall()
+                bridge_rows = conn.execute(
+                    """
+                    SELECT id, user_id, role, content, kind, created_at FROM messages
+                    WHERE chat_id = ? AND id > ? AND id < ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (chat_id, summarized_through_id, recent_first_id, bridge_limit),
+                ).fetchall()
+            else:
+                source_rows = conn.execute(
+                    """
+                    SELECT id, user_id, role, content, kind, created_at FROM messages
+                    WHERE chat_id = ? AND id < ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (chat_id, recent_first_id, compression_limit),
+                ).fetchall()
+                source_rows = list(reversed(source_rows))
+                bridge_rows = conn.execute(
+                    """
+                    SELECT id, user_id, role, content, kind, created_at FROM messages
+                    WHERE chat_id = ? AND id < ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (chat_id, recent_first_id, bridge_limit),
+                ).fetchall()
+            source = [dict(row) for row in source_rows]
+            bridge = [dict(row) for row in reversed(bridge_rows)]
+        source = [item for item in source if not self._is_suppressed(chat_id, item)]
+        bridge = [item for item in bridge if not self._is_suppressed(chat_id, item)]
+        return source, bridge, recent
+
     @staticmethod
     def render_compression_source(items: list[dict[str, object]], per_message_limit: int = 180) -> str:
         seen: set[tuple[str, str]] = set()
@@ -71,7 +156,9 @@ class ContextStore:
             if not content or key in seen:
                 continue
             seen.add(key)
-            lines.append(f"{role}: {content}")
+            created_at = str(item.get("created_at") or "")[:16]
+            timestamp = f"[{created_at} UTC] " if created_at else ""
+            lines.append(f"{timestamp}{role}: {content}")
         return "\n".join(lines)
 
     @staticmethod

@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import json
-
 import sqlite3
-
 from contextlib import contextmanager
-
 from datetime import datetime, timedelta, timezone
-
 from pathlib import Path
-
 from typing import Any, Iterator
 
+
 MAX_ENABLED_SCHEDULED_TASKS_PER_CHAT = 25
+
 
 class ScheduledTaskLimitError(RuntimeError):
     pass
 
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -858,6 +857,48 @@ class Database:
                 (chat_id, limit),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def sync_group_member_snapshot(
+        self,
+        chat_id: str,
+        members: dict[str, str],
+    ) -> dict[str, Any]:
+        diff = self.preview_group_member_snapshot(chat_id, members)
+        self.replace_group_member_snapshot(chat_id, members)
+        return diff
+
+    def preview_group_member_snapshot(
+        self,
+        chat_id: str,
+        members: dict[str, str],
+    ) -> dict[str, Any]:
+        current = {str(user_id): str(name or "").strip() for user_id, name in members.items() if str(user_id).strip()}
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT user_id, display_name FROM group_member_snapshots WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchall()
+        previous = {str(row["user_id"]): str(row["display_name"] or "") for row in rows}
+        joined_ids = sorted(set(current) - set(previous))
+        left_ids = sorted(set(previous) - set(current))
+        return {
+            "initialized": not previous,
+            "joined": [{"user_id": user_id, "display_name": current.get(user_id, "")} for user_id in joined_ids],
+            "left": [{"user_id": user_id, "display_name": previous.get(user_id, "")} for user_id in left_ids],
+        }
+
+    def replace_group_member_snapshot(self, chat_id: str, members: dict[str, str]) -> None:
+        now = utc_now()
+        current = {str(user_id): str(name or "").strip() for user_id, name in members.items() if str(user_id).strip()}
+        with self.connect() as conn:
+            conn.execute("DELETE FROM group_member_snapshots WHERE chat_id = ?", (chat_id,))
+            conn.executemany(
+                """
+                INSERT INTO group_member_snapshots(chat_id, user_id, display_name, updated_at)
+                VALUES(?, ?, ?, ?)
+                """,
+                [(chat_id, user_id, current[user_id], now) for user_id in current],
+            )
 
     def has_recent_chat_event(
         self,
