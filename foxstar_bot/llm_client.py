@@ -191,6 +191,14 @@ class LLMClient:
     ) -> str:
         model_name = _canonicalize_model_name(model or self.config.name)
         resolved_provider = _resolve_provider(provider or self.config.provider, model_name)
+        if resolved_provider == "cerebras":
+            return self._cerebras_chat(
+                messages,
+                model_name,
+                max_tokens=max_completion_tokens or self.config.max_output_tokens,
+                timeout=timeout,
+                usage_context=usage_context,
+            )
         if resolved_provider == "openrouter":
             return self._openrouter_chat(
                 messages,
@@ -549,6 +557,36 @@ class LLMClient:
                 model, getattr(choice, "finish_reason", None), getattr(response, "usage", None),
             )
         return content
+
+    def _cerebras_chat(
+        self,
+        messages: list[dict[str, Any]],
+        model: str,
+        *,
+        max_tokens: int,
+        timeout: float | None,
+        usage_context: dict[str, Any] | None,
+    ) -> str:
+        if self.cerebras_client is None:
+            raise RuntimeError("CEREBRAS_API_KEY is not configured")
+        api_timeout = float(timeout or REQUEST_TIMEOUT)
+        response = _call_with_hard_timeout(
+            "cerebras.chat",
+            api_timeout + 2.0,
+            self.cerebras_client.chat.completions.create,
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            timeout=api_timeout,
+        )
+        self._record_usage(
+            usage_context,
+            api="cerebras.chat.completions",
+            model=model,
+            provider="cerebras",
+            usage=getattr(response, "usage", None),
+        )
+        return (response.choices[0].message.content or "").strip()
 
     def reply_gate_json(
         self,
