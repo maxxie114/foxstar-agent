@@ -248,7 +248,8 @@ class Database:
                     error TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     started_at TEXT NOT NULL DEFAULT '',
-                    finished_at TEXT NOT NULL DEFAULT ''
+                    finished_at TEXT NOT NULL DEFAULT '',
+                    delivered_at TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS finance_noteboard_entries (
@@ -279,6 +280,14 @@ class Database:
                 except sqlite3.OperationalError as exc:
                     if "duplicate column name" not in str(exc).lower():
                         raise
+            if not any(row["name"] == "delivered_at" for row in conn.execute("PRAGMA table_info(agent_tasks)")):
+                conn.execute("ALTER TABLE agent_tasks ADD COLUMN delivered_at TEXT NOT NULL DEFAULT ''")
+
+
+                conn.execute(
+                    "UPDATE agent_tasks SET delivered_at = COALESCE(NULLIF(finished_at, ''), created_at) "
+                    "WHERE status IN ('done', 'failed')"
+                )
 
     def get_setting(self, key: str, default: Any = None) -> Any:
         with self.connect() as conn:
@@ -524,6 +533,22 @@ class Database:
                 f"SELECT * FROM agent_tasks {where} ORDER BY id DESC LIMIT ?", tuple(params)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_undelivered_agent_tasks(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_tasks WHERE status IN ('done', 'failed') "
+                "AND delivered_at = '' ORDER BY id ASC LIMIT ?",
+                (max(1, min(int(limit), 50)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_agent_task_delivered(self, task_id: int) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE agent_tasks SET delivered_at = ? WHERE id = ? AND delivered_at = ''",
+                (utc_now(), int(task_id)),
+            )
 
     def claim_pending_agent_task(self) -> dict[str, Any] | None:
         with self.connect() as conn:
