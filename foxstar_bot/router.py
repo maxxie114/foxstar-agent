@@ -433,7 +433,9 @@ class ContextCompressor:
         if self.llm is None or not source_items:
             return
         previous_summary = str(cached_summary.get("summary") or "").strip()
-        if previous_summary and len(source_items) < CONTEXT_COMPRESSION_REFRESH_MESSAGES:
+        compression_provider = self.config.model.context_compression_provider or self.config.model_router.low.provider
+        refresh_messages = 4 if compression_provider == "sambanova" else CONTEXT_COMPRESSION_REFRESH_MESSAGES
+        if previous_summary and len(source_items) < refresh_messages:
             return
         source_text = self.context.render_compression_source(source_items)
         if not source_text:
