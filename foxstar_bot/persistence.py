@@ -252,6 +252,24 @@ class Database:
                     delivered_at TEXT NOT NULL DEFAULT ''
                 );
 
+                CREATE TABLE IF NOT EXISTS reply_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id TEXT NOT NULL,
+                    source_message_id TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL,
+                    context_id INTEGER,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    error TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT NOT NULL DEFAULT '',
+                    finished_at TEXT NOT NULL DEFAULT ''
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_reply_jobs_source
+                    ON reply_jobs(chat_id, source_message_id)
+                    WHERE source_message_id != '';
+                CREATE INDEX IF NOT EXISTS idx_reply_jobs_status_id ON reply_jobs(status, id);
+
                 CREATE TABLE IF NOT EXISTS finance_noteboard_entries (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id TEXT NOT NULL,
@@ -487,6 +505,43 @@ class Database:
                 (chat_id, created_by, instruction[:4000], now),
             )
             return int(cursor.lastrowid)
+
+    def add_reply_job(self, chat_id: str, source_message_id: str, payload_json: str,
+                      context_id: int | None) -> int | None:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO reply_jobs(chat_id, source_message_id, payload_json, context_id, created_at) "
+                "VALUES(?, ?, ?, ?, ?)",
+                (chat_id, source_message_id, payload_json, context_id, utc_now()),
+            )
+            return int(cursor.lastrowid) if cursor.rowcount else None
+
+    def start_reply_job(self, job_id: int) -> bool:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                "UPDATE reply_jobs SET status = 'running', attempts = attempts + 1, started_at = ? "
+                "WHERE id = ? AND status = 'queued'", (utc_now(), job_id),
+            )
+            return bool(cursor.rowcount)
+
+    def finish_reply_job(self, job_id: int, *, error: str = "") -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE reply_jobs SET status = ?, error = ?, finished_at = ? WHERE id = ?",
+                ("failed" if error else "done", error[:2000], utc_now(), job_id),
+            )
+
+    def recover_reply_jobs(self) -> None:
+        with self.connect() as conn:
+            conn.execute("UPDATE reply_jobs SET status = 'queued' WHERE status = 'running'")
+
+    def list_queued_reply_jobs(self, after_id: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM reply_jobs WHERE status = 'queued' AND id > ? ORDER BY id LIMIT ?",
+                (after_id, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def update_agent_task(self, task_id: int, *, status: str | None = None,
                           progress_note: str | None = None, result: str | None = None,

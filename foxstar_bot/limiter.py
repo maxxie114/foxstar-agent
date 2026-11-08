@@ -27,6 +27,7 @@ class RateLimiter:
         bypass: bool = False,
         user_daily_limit_override: int | None = None,
         group_daily_limit_override: int | None = None,
+        ignore_cooldown: bool = False,
     ) -> LimitResult:
         if bypass:
             return LimitResult(True)
@@ -50,7 +51,7 @@ class RateLimiter:
                 last_at = float(row["last_at"]) if row else 0
                 if daily_limit > 0 and count >= daily_limit:
                     return LimitResult(False, "daily_limit")
-                if now - last_at < cooldown:
+                if not ignore_cooldown and now - last_at < cooldown:
                     return LimitResult(False, "cooldown")
 
             for key, _cooldown, _daily_limit in checks:

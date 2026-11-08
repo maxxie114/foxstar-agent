@@ -3,16 +3,13 @@ from __future__ import annotations
 from collections import defaultdict, deque
 
 from .persistence import Database, utc_now
-
 from .privacy import public_participant_label, redact_private_ids
 
 DEFAULT_CONTEXT_MESSAGES = 30
-
 MAX_CONTEXT_MESSAGES = 200
-
 CONTEXT_COMPRESSION_MESSAGES = 500
-
 CONTEXT_BRIDGE_MESSAGES = 40
+
 
 def normalize_context_messages(value: object, default: int = DEFAULT_CONTEXT_MESSAGES) -> int:
     try:
@@ -21,11 +18,39 @@ def normalize_context_messages(value: object, default: int = DEFAULT_CONTEXT_MES
         message_count = default
     return max(1, min(message_count, MAX_CONTEXT_MESSAGES))
 
+
 class ContextStore:
     def __init__(self, db: Database, max_turns: int = DEFAULT_CONTEXT_MESSAGES) -> None:
         self.db = db
         self.max_turns = normalize_context_messages(max_turns)
         self._suppressed_context_keys: dict[str, deque[tuple[str, str, str]]] = defaultdict(lambda: deque(maxlen=64))
+
+    def add_message(self, chat_id: str, user_id: str, role: str, content: str, kind: str = "text") -> int | None:
+        content = self._trim(content)
+        if not content:
+            return None
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, user_id, role, content, kind FROM messages
+                WHERE chat_id = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (chat_id,),
+            ).fetchone()
+            if (
+                row is not None
+                and row["user_id"] == user_id
+                and row["role"] == role
+                and row["kind"] == kind
+                and _normalized_for_dedupe(row["content"]) == _normalized_for_dedupe(content)
+            ):
+                return int(row["id"])
+            cursor = conn.execute(
+                "INSERT INTO messages(chat_id, user_id, role, content, kind, created_at) VALUES(?, ?, ?, ?, ?, ?)",
+                (chat_id, user_id, role, content, kind, utc_now()),
+            )
+            return int(cursor.lastrowid)
 
     def suppress_message(self, chat_id: str, *, user_id: str, role: str, content: str) -> None:
         normalized = _normalized_for_dedupe(content)
@@ -86,14 +111,16 @@ class ContextStore:
         summarized_through_id: int = 0,
         compression_limit: int = CONTEXT_COMPRESSION_MESSAGES,
         bridge_limit: int = CONTEXT_BRIDGE_MESSAGES,
+        max_id: int | None = None,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
         recent_limit = self.max_turns if max_turns is None else normalize_context_messages(max_turns)
         compression_limit = max(1, min(int(compression_limit), CONTEXT_COMPRESSION_MESSAGES))
         bridge_limit = max(1, min(int(bridge_limit), CONTEXT_BRIDGE_MESSAGES))
         with self.db.connect() as conn:
             recent_rows = conn.execute(
-                "SELECT id, user_id, role, content, kind, created_at FROM messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
-                (chat_id, recent_limit),
+                "SELECT id, user_id, role, content, kind, created_at FROM messages "
+                "WHERE chat_id = ? AND id <= ? ORDER BY id DESC LIMIT ?",
+                (chat_id, max_id if max_id is not None else 2**63 - 1, recent_limit),
             ).fetchall()
             recent = [dict(row) for row in reversed(recent_rows)]
             recent = [item for item in recent if not self._is_suppressed(chat_id, item)]
@@ -179,6 +206,7 @@ class ContextStore:
         )
         return probe in keys
 
+
 def _compact_content(content: str, limit: int = 110) -> str:
     content = " ".join((content or "").split())
     if not content or _is_low_signal_content(content):
@@ -189,6 +217,7 @@ def _compact_content(content: str, limit: int = 110) -> str:
         content = content[:limit].rstrip() + "..."
     return content
 
+
 def _is_low_signal_content(content: str) -> bool:
     value = content.strip()
     if not value:
@@ -198,6 +227,7 @@ def _is_low_signal_content(content: str) -> bool:
     if len(value) <= 8 and "[" in value and "]" in value:
         return True
     return False
+
 
 def _normalized_for_dedupe(content: str) -> str:
     return " ".join((content or "").split())
