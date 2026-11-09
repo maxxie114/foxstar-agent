@@ -2,6 +2,8 @@
 
 ## Public source edition
 
+Added a minimal JSON configuration and a blank environment template for library callers. Git accepts new files only when their exact paths have been reviewed and added to the release allowlist.
+
 This edition contains the model gateway, research agent, background task runner, document and vision tools, rolling context, reply queue storage, and synthetic tests. The WeChat transport, vendor binaries, bundled datasets and production integration are outside this distribution.
 
 ## Development history

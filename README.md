@@ -21,6 +21,27 @@ python -m pytest -q
 
 The tests use synthetic inputs, temporary files and model doubles. To follow a research question from submission to completion, see [the background task tests](tests/test_agent_tasks.py). For an example of queue recovery after a process restart, see [the recovery test](tests/test_public_core.py).
 
+## Configure a caller
+
+Copy [config.example.json](config.example.json) to `config.json` for local edits. The example selects one model and disables optional tools. A caller can load it with Python's standard library:
+
+```python
+import json
+import os
+from pathlib import Path
+
+from foxstar_bot.config import AppConfig, ModelConfig, ToolConfig
+
+settings = json.loads(Path("config.json").read_text(encoding="utf-8"))
+config = AppConfig(
+    model=ModelConfig(**settings["model"]),
+    tools=ToolConfig(**settings["tools"]),
+    openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+)
+```
+
+For live OpenAI calls, set `OPENAI_API_KEY` in the caller's environment. If your application loads dotenv files, copy [.env.example](.env.example) to `.env` and fill in the key locally. FoxStar itself does not load dotenv files. The offline tests need no key.
+
 ## Explore the code
 
 | Component | Responsibility |

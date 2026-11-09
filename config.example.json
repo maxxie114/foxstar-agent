@@ -1,0 +1,14 @@
+{
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1-mini",
+    "max_output_tokens": 700
+  },
+  "tools": {
+    "web_search_enabled": false,
+    "docs_enabled": false,
+    "vision_enabled": false,
+    "auto_memory_enabled": false,
+    "code_execution_enabled": false
+  }
+}
