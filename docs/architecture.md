@@ -1,22 +1,29 @@
 # Architecture
 
-## Research alongside conversation
+## Message flow
 
-A caller records a research instruction in SQLite. The background task runner claims pending work and gives the model the instruction and research tools in a separate conversation. The research tool can refine a query, gather evidence from multiple pages and return a brief to the model. The worker stores progress while it runs, then saves a report or records a failure. The database tracks delivery separately so an application can distinguish “the report is ready” from “the recipient received it.”
+The application assembles configuration, authorization, persistence, model clients, tools, skills and a transport adapter. Incoming messages enter a bounded worker queue. `MessageRouter` records context, dispatches commands, evaluates whether to reply, selects a model and executes a bounded tool loop. Replies are split for delivery through the adapter.
 
-## Replies and recovery
+The default adapter connects to an operator-supplied WeChat runtime. Both the adapter and model client can be injected into `build_router` for other integrations or offline testing. Importing the framework does not require the WeChat client or native libraries.
 
-A reply job records its source message, serialized payload and context cutoff. When a source message has an identifier, the queue can recognize another submission of that message. A worker claims a queued job before processing it. Recovery puts interrupted running jobs back into the queue. Applications that add a transport must account for the interval between sending a message and recording its delivery.
+## Research, schedules and recovery
 
-## Memory and model selection
+A background task runner claims research jobs, gives the model separate task context, and persists progress, results and delivery state. The application also polls due schedules; the router executes scheduled commands or prompts and updates their next run time.
 
-Context is scoped to the conversation. Recent messages remain available verbatim. Older messages can be compressed asynchronously, and an intermediate window covers the gap until a summary catches up. The model client converts tool descriptions and tool results to the provider’s expected format. It can stop a tool loop when a handler produces a final answer, and it tracks repeated failed calls.
+Reply-job storage supports deduplication, claiming and recovery. These queue APIs remain available to callers; the restored application retains its upstream in-memory ingress worker queue. Applications using durable reply jobs must account for the interval between sending a reply and recording delivery.
 
-## Working with files
+## Memory and skills
 
-The document module reads PDF, DOCX and text files and splits extracted text into searchable passages. File checks can detect an incomplete PDF or an invalid DOCX archive before processing. The vision module prepares local images for a caller-supplied model. The included XML functions parse message markup without requiring a messaging client.
+Conversation context combines recent messages with rolling summaries of older history. Memory and settings are scoped by caller-supplied identifiers. The model client supports provider selection and tool schemas; the router adds per-conversation overrides and configurable routing tiers.
 
-## Scope of the public edition
+The skill registry searches `skills/*/SKILL.md` and loads companion source files. Document, vision, search, market, weather, game, code-execution and optional clan-service tools are available through the router. Native image analysis and document validation are preserved.
 
-This library is suitable for studying and testing individual components. An application would have to supply ingress, authorization policy, delivery and deployment integration to use it as a live messaging agent. The shipped tests exercise the components locally. Historical commits show the evolution of the retained source; the current revision is the supported test target.
+## Release boundary
 
+The public source includes the authored application, routing, model switching, commands, scheduling, skills, control API, tools and Python WeChat integration. All upstream top-level Python modules are represented. The public edition also retains its context snapshot and durable reply-job helpers.
+
+Private `.env` and deployment configuration, database files and dumps, chat logs, stored memory, knowledgebase contents, private persona prompts, operational bug-report IDs and production identity defaults are excluded. Generic prompt templates and invented test fixtures are supplied instead. The database schema and data-access code remain, allowing users to create their own empty database.
+
+Third-party DLLs, executables, SDK/vendor trees, release archives and expanded external game datasets are excluded. WeChat dependencies are installed separately by the operator. Game loaders retain support for external resources and use built-in examples when those files are absent.
+
+The exact-path Git allowlist admits reviewed source and examples. Runtime output and local secrets are ignored by default. Historical snapshots describe the earlier partial library extraction; the restored current source is the supported integration target.

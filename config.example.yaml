@@ -1,0 +1,37 @@
+# Copy to config.yaml and configure locally. Do not publish the edited file.
+bot_name: FoxStar
+owner_user_id: ""
+whitelist_user_ids: []
+whitelist_room_ids: []
+trigger_prefix: "!"
+
+wcf:
+  mode: remote
+  host: "127.0.0.1"
+  port: 10086
+
+model:
+  provider: openai
+  name: gpt-4.1-mini
+  max_output_tokens: 700
+
+model_router:
+  enabled: false
+
+tools:
+  web_search_enabled: false
+  docs_enabled: true
+  vision_enabled: false
+  auto_memory_enabled: false
+  code_execution_enabled: false
+
+storage:
+  sqlite_path: data/foxstar.sqlite3
+  files_dir: data/files
+  images_dir: data/images
+
+clan:
+  api_base: ""
+  enabled_groups: []
+  attendance_api_base: ""
+  import_groups: []

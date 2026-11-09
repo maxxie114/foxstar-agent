@@ -1,5 +1,12 @@
 # Changelog
 
+## Restored application source
+
+Restored authored application startup, message routing, model switching, commands, scheduled-task execution, skills, tools, the local control API and the Python WeChat adapter. Retained the public edition's context snapshots and durable reply-job APIs. Added offline integration tests and a blank application configuration.
+
+Production identity defaults, deployment-specific examples and bug-report IDs are removed. Generic prompts and synthetic fixtures replace private prompt and conversation content. No credentials, database or memory contents, knowledgebase contents, vendor binaries or external datasets are included.
+
+
 ## Public source edition
 
 Added a minimal JSON configuration and a blank environment template for library callers. Git accepts new files only when their exact paths have been reviewed and added to the release allowlist.

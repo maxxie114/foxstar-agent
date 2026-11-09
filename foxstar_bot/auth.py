@@ -13,6 +13,12 @@ DB_KEY_WHITELIST_ROOMS = "whitelist_room_ids"
 
 
 class AuthService:
+    """Whitelist authorization, backed by the settings table.
+
+    The config.yaml lists are one-time seeds; every runtime update (e.g.
+    /whitelist add) writes the database. The old design reloaded
+    config.yaml on mtime change, which meant chat commands rewrote the
+    config file and silently blocked git-pull deploys."""
 
     def __init__(self, config: AppConfig, db: Database | None = None, config_path: str | None = None) -> None:
         self.db = db

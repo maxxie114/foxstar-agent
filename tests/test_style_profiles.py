@@ -12,7 +12,7 @@ def test_parse_style_combines_format_mbti_and_zodiac():
 
 
 def test_parse_style_accepts_chinese_zodiac_alias():
-    style, error = parse_style_tokens(["enfp", "\u53cc\u9c7c\u5ea7"])
+    style, error = parse_style_tokens(["enfp", "双鱼座"])
 
     assert error == ""
     assert style is not None
