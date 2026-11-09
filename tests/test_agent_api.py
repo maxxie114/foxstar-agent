@@ -92,6 +92,41 @@ def test_bugreports(client):
     body = r.json()
     assert body["count"] == 1 and body["reports"][0]["description"] == "test bug"
 
+@pytest.mark.parametrize("status,expected", [("open", 1), ("closed", 1), ("all", 2)])
+def test_bugreport_status_filters(client, status, expected):
+    with client.app.state.db.connect() as conn:
+        conn.execute(
+            "INSERT INTO bug_reports(chat_id, created_by, description, status, created_at, updated_at) "
+            "VALUES('room', 'u', 'resolved example', 'closed', datetime('now'), datetime('now'))"
+        )
+    response = client.get(f"/api/bugreports?status={status}", headers=READ)
+    assert response.status_code == 200
+    assert response.json()["count"] == expected
+    if status != "all":
+        assert all(row["status"] == status for row in response.json()["reports"])
+
+def test_bugreport_invalid_status_is_rejected(client):
+    assert client.get("/api/bugreports?status=invalid", headers=READ).status_code == 400
+
+@pytest.mark.parametrize("override,expected", [(None, "127.0.0.1"), ("0.0.0.0", "0.0.0.0")])
+def test_api_bind_address_is_local_unless_explicitly_configured(monkeypatch, override, expected):
+    import sys
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from foxstar_bot import agent_api
+
+    monkeypatch.delenv("AGENT_API_HOST", raising=False)
+    if override is not None:
+        monkeypatch.setenv("AGENT_API_HOST", override)
+    server = Mock()
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=server))
+    application = object()
+    monkeypatch.setattr(agent_api, "create_app", lambda: application)
+    agent_api.main()
+    server.assert_called_once()
+    assert server.call_args.args == (application,)
+    assert server.call_args.kwargs["host"] == expected
+
 def test_messages_redacted(client):
     r = client.get("/api/messages?chat=room", headers=READ)
     body = r.json()

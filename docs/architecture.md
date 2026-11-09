@@ -26,4 +26,4 @@ Private `.env` and deployment configuration, database files and dumps, chat logs
 
 Third-party DLLs, executables, SDK/vendor trees, release archives and expanded external game datasets are excluded. WeChat dependencies are installed separately by the operator. Game loaders retain support for external resources and use built-in examples when those files are absent.
 
-The exact-path Git allowlist admits reviewed source and examples. Runtime output and local secrets are ignored by default. Historical snapshots describe the earlier partial library extraction; the restored current source is the supported integration target.
+The exact-path Git allowlist admits reviewed source and examples. `MANIFEST.in` applies an exact-path allowlist to source distributions; update both lists when adding a release file. Wheels contain the Python package only. Runtime output and local secrets are excluded even when building from a working checkout. Historical snapshots describe the earlier partial library extraction; the restored current source is the supported integration target.

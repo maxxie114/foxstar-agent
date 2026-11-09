@@ -1,5 +1,9 @@
 # Changelog
 
+## Publication review
+
+The control API defaults to localhost and validates its bug-report status filter. Source distributions now include the application, generic prompts, skills and configuration examples through an exact-path allowlist that excludes local data and vendor artifacts.
+
 ## Restored application source
 
 Restored authored application startup, message routing, model switching, commands, scheduled-task execution, skills, tools, the local control API and the Python WeChat adapter. Retained the public edition's context snapshots and durable reply-job APIs. Added offline integration tests and a blank application configuration.

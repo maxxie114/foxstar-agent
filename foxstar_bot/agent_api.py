@@ -247,8 +247,10 @@ def create_app(config: AppConfig | None = None, db: Database | None = None,
 
     @app.get("/api/bugreports", dependencies=[Depends(require_read)])
     async def bugreports(status: str = "open", limit: int = 30) -> dict[str, Any]:
+        if status not in {"open", "closed", "all"}:
+            raise HTTPException(400, "status must be open, closed, or all")
         with database.connect() as conn:
-            clause = "WHERE status = ?" if status in {"open", "closed", "all"} else ""
+            clause = "WHERE status = ?" if status != "all" else ""
             params = (status,) if status != "all" else ()
             rows = conn.execute(
                 f"SELECT id, chat_id, created_by, description, status, created_at, closed_at FROM bug_reports {clause} ORDER BY id DESC LIMIT ?",
@@ -391,7 +393,7 @@ def main() -> None:
     import uvicorn
 
     port = int(os.environ.get("AGENT_API_PORT", "8790"))
-    host = os.environ.get("AGENT_API_HOST", "0.0.0.0")
+    host = os.environ.get("AGENT_API_HOST", "127.0.0.1")
     app = create_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
 

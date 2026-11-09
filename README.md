@@ -39,6 +39,8 @@ Optional integrations:
 
 Run the application from the checkout so it can find [PROMPT.md](PROMPT.md), [prompt templates](prompt_templates/) and [skills](skills/). These contain generic instructions. A local `knowledge.md` is optional and starts absent. SQLite is initialized on first use; no existing database or memory records are distributed. Expanded game datasets are also excluded; games use the built-in source-defined examples when external resources are absent.
 
+The source distribution includes these startup assets and can be used from its extracted directory. The wheel contains the Python package; callers using only the wheel supply their own prompts, skills and configuration.
+
 ## Explore the code
 
 | Component | Responsibility |

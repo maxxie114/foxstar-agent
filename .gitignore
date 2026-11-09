@@ -143,3 +143,4 @@
 !/config.example.yaml
 
 !/tests/test_public_framework.py
+!/MANIFEST.in

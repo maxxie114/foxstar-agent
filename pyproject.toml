@@ -32,6 +32,7 @@ foxstar-agent = "foxstar_bot.app:main"
 
 [tool.setuptools]
 packages = ["foxstar_bot"]
+include-package-data = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
