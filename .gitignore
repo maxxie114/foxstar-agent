@@ -1,0 +1,16 @@
+# Default to local-only. Add new public files explicitly.
+*
+!/.gitignore
+!/README.md
+!/CHANGELOG.md
+!/LICENSE
+!/pyproject.toml
+!/docs/
+!/docs/architecture.md
+!/foxstar_bot/
+!/foxstar_bot/*.py
+!/tests/
+!/tests/test_*.py
+!/prompt_templates/
+!/prompt_templates/*.md
+
