@@ -1,6 +1,8 @@
 # FoxStar Agent
 
-FoxStar is a conversation agent with message routing, model switching, tool calls, background research, scheduled tasks, skills, and persistent memory. This repository includes the authored application code and Python WeChat adapter. Credentials, stored conversations, memory and knowledgebase content, deployment configuration, and third-party WeChat binaries are excluded.
+This repository is the open-source edition of the full FoxStar Agent WeChat bot agentic system. It includes the authored agent framework and Python WeChat adapter, automated workflows and scheduled tasks, remote operation through the control API, and debugging and diagnostic tools. Its capabilities include message routing, model switching, tool calls, background research, skills, and persistent memory.
+
+Credentials, stored conversations, actual memory and knowledgebase content, deployment configuration, and third-party WeChat binaries are excluded. The code for these capabilities is preserved so you can configure and run your own instance.
 
 ## Try it offline
 
