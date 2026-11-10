@@ -1,0 +1,225 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200" role="img" aria-labelledby="title desc">
+  <title id="title">FoxStar WeChat Bot Runtime Architecture</title>
+  <desc id="desc">A flow chart showing the current WeChat bot runtime, including ingress, routing, reply gate, testing mode, tools, skills, storage, and logs.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#101820"/>
+      <stop offset="48%" stop-color="#18222B"/>
+      <stop offset="100%" stop-color="#0E151B"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1D7A8C"/>
+      <stop offset="100%" stop-color="#204A5C"/>
+    </linearGradient>
+    <linearGradient id="model" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7B3F98"/>
+      <stop offset="100%" stop-color="#3D5C9A"/>
+    </linearGradient>
+    <linearGradient id="tool" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#257D52"/>
+      <stop offset="100%" stop-color="#315D6F"/>
+    </linearGradient>
+    <linearGradient id="store" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#8C6A2A"/>
+      <stop offset="100%" stop-color="#65533A"/>
+    </linearGradient>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="124%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#D8E7EA"/>
+    </marker>
+    <marker id="arrowAccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#8BE0C2"/>
+    </marker>
+    <style>
+      .title { font: 800 46px "Segoe UI", Arial, sans-serif; fill: #F4FBFF; letter-spacing: 0; }
+      .subtitle { font: 500 20px "Segoe UI", Arial, sans-serif; fill: #B9CDD4; letter-spacing: 0; }
+      .section { font: 800 18px "Segoe UI", Arial, sans-serif; fill: #EAF6F8; letter-spacing: .5px; text-transform: uppercase; }
+      .box-title { font: 800 24px "Segoe UI", Arial, sans-serif; fill: #FFFFFF; letter-spacing: 0; }
+      .box-text { font: 500 17px "Segoe UI", Arial, sans-serif; fill: #DCEBEE; letter-spacing: 0; }
+      .small { font: 500 15px "Segoe UI", Arial, sans-serif; fill: #C3D4DA; letter-spacing: 0; }
+      .tiny { font: 500 13px "Segoe UI", Arial, sans-serif; fill: #AFC2C9; letter-spacing: 0; }
+      .pill { font: 800 14px "Segoe UI", Arial, sans-serif; fill: #0B1116; letter-spacing: .3px; }
+      .box { rx: 8; ry: 8; filter: url(#shadow); stroke: rgba(255,255,255,.18); stroke-width: 1.2; }
+      .thinBox { rx: 8; ry: 8; fill: rgba(255,255,255,.06); stroke: rgba(255,255,255,.16); stroke-width: 1.1; }
+      .dashed { rx: 8; ry: 8; fill: rgba(139,224,194,.06); stroke: #8BE0C2; stroke-width: 1.4; stroke-dasharray: 8 7; }
+      .arrow { fill: none; stroke: #D8E7EA; stroke-width: 3; marker-end: url(#arrow); }
+      .arrow2 { fill: none; stroke: #8BE0C2; stroke-width: 3; marker-end: url(#arrowAccent); }
+      .mutedArrow { fill: none; stroke: rgba(216,231,234,.45); stroke-width: 2.4; marker-end: url(#arrow); }
+      .lane { fill: rgba(255,255,255,.035); stroke: rgba(255,255,255,.09); stroke-width: 1; rx: 8; ry: 8; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1200" fill="url(#bg)"/>
+  <path d="M0 160 C300 90 460 220 720 145 C1020 60 1240 145 1800 80 L1800 0 L0 0 Z" fill="#1C3D46" opacity=".32"/>
+  <path d="M0 1060 C280 980 520 1120 820 1030 C1080 950 1320 1070 1800 990 L1800 1200 L0 1200 Z" fill="#342B4A" opacity=".28"/>
+
+  <text x="70" y="78" class="title">FoxStar WeChat Agent Architecture</text>
+  <text x="72" y="112" class="subtitle">event-driven WeChat bot with reply gate, testing mode, scheduler, games, accounting, local tools, and multi-provider orchestration</text>
+
+  <rect x="58" y="145" width="1684" height="138" class="lane"/>
+  <text x="82" y="178" class="section">1. WeChat ingestion and runtime gates</text>
+
+  <rect x="90" y="198" width="210" height="58" class="box" fill="#315C72"/>
+  <text x="114" y="223" class="box-title">WeChat Group</text>
+  <text x="114" y="246" class="box-text">messages, images, files, quotes</text>
+
+  <rect x="365" y="190" width="230" height="74" class="box" fill="url(#core)"/>
+  <text x="389" y="218" class="box-title">WeChatFerry</text>
+  <text x="389" y="243" class="box-text">WCF adapter + PC WeChat</text>
+
+  <rect x="660" y="190" width="245" height="74" class="box" fill="#315C72"/>
+  <text x="684" y="218" class="box-title">Priority Queue</text>
+  <text x="684" y="243" class="box-text">whitelist first, worker pool</text>
+
+  <rect x="970" y="190" width="280" height="74" class="box" fill="#4F5F66"/>
+  <text x="994" y="218" class="box-title">Passive State Log</text>
+  <text x="994" y="243" class="box-text">chat history, names, events, snapshots</text>
+
+  <rect x="1315" y="190" width="345" height="74" class="box" fill="#673C4A"/>
+  <text x="1339" y="218" class="box-title">Global Bot Off</text>
+  <text x="1339" y="243" class="box-text">silent logging, no API calls, no replies</text>
+
+  <path class="arrow" d="M300 227 L356 227"/>
+  <path class="arrow" d="M595 227 L651 227"/>
+  <path class="arrow" d="M905 227 L961 227"/>
+  <path class="mutedArrow" d="M1250 227 L1306 227"/>
+
+  <rect x="58" y="315" width="1684" height="352" class="lane"/>
+  <text x="82" y="348" class="section">2. Routing, command layer, policy, and main model</text>
+
+  <rect x="90" y="382" width="280" height="150" class="box" fill="url(#core)"/>
+  <text x="118" y="414" class="box-title">MessageRouter</text>
+  <text x="118" y="447" class="box-text">normalizes XML quotes</text>
+  <text x="118" y="473" class="box-text">detects @ / direct mode</text>
+  <text x="118" y="499" class="box-text">image/file/doc routing</text>
+
+  <rect x="90" y="552" width="280" height="72" class="thinBox"/>
+  <text x="118" y="582" class="box-title">Auth Layer</text>
+  <text x="118" y="606" class="box-text">whitelist, blacklist, owner, target list</text>
+
+  <rect x="455" y="362" width="300" height="110" class="box" fill="#3D5864"/>
+  <text x="482" y="394" class="box-title">CommandProcessor</text>
+  <text x="482" y="427" class="box-text">/set /gset /model /reasoning</text>
+  <text x="482" y="452" class="box-text">/schedule /game /fortune /accounting</text>
+
+  <rect x="455" y="500" width="300" height="124" class="box" fill="#47504B"/>
+  <text x="482" y="532" class="box-title">Group Settings</text>
+  <text x="482" y="565" class="box-text">reply gate, cooldown, delay</text>
+  <text x="482" y="591" class="box-text">model, testing mode, tools, length</text>
+
+  <rect x="835" y="362" width="295" height="118" class="box" fill="#5B4E2B"/>
+  <text x="864" y="394" class="box-title">Reply Gate</text>
+  <text x="864" y="427" class="box-text">configured judge, REPLY/PASS</text>
+  <text x="864" y="453" class="box-text">social fast-paths and auto-join</text>
+
+  <rect x="835" y="512" width="295" height="112" class="box" fill="#643843"/>
+  <text x="864" y="544" class="box-title">Runtime Gates</text>
+  <text x="864" y="577" class="box-text">cooldown, direct mode, active game</text>
+  <text x="864" y="603" class="box-text">testing mode bypasses prompt assembly</text>
+
+  <rect x="1210" y="358" width="360" height="162" class="box" fill="url(#model)"/>
+  <text x="1240" y="392" class="box-title">Main LLM Orchestration</text>
+  <text x="1240" y="426" class="box-text">provider/model selected per group</text>
+  <text x="1240" y="452" class="box-text">OpenAI, OpenRouter, DeepSeek, Together, MiniMax</text>
+  <text x="1240" y="478" class="box-text">reasoning normalization and timeout fallback</text>
+
+  <rect x="1210" y="544" width="360" height="80" class="thinBox"/>
+  <text x="1240" y="575" class="box-title">Testing Mode</text>
+  <text x="1240" y="600" class="box-text">single-message only, no prompt/tools/history</text>
+
+  <path class="arrow" d="M230 264 L230 373"/>
+  <path class="arrow" d="M370 457 L446 417"/>
+  <path class="arrow" d="M370 492 L446 556"/>
+  <path class="arrow" d="M755 417 L826 417"/>
+  <path class="arrow" d="M982 480 L982 503"/>
+  <path class="arrow" d="M1130 568 C1160 568 1170 439 1201 439"/>
+  <path class="arrow2" d="M1130 421 L1201 421"/>
+  <path class="mutedArrow" d="M1378 520 L1378 535"/>
+
+  <rect x="58" y="700" width="805" height="408" class="lane"/>
+  <text x="82" y="733" class="section">3. Context, memory, storage, and logs</text>
+
+  <rect x="90" y="770" width="335" height="118" class="box" fill="url(#store)"/>
+  <text x="118" y="802" class="box-title">Context Window</text>
+  <text x="118" y="836" class="box-text">recent context plus compacted history</text>
+  <text x="118" y="862" class="box-text">timeout suppression for bad prompts</text>
+
+  <rect x="90" y="920" width="335" height="118" class="box" fill="url(#store)"/>
+  <text x="118" y="952" class="box-title">MemoryStore</text>
+  <text x="118" y="986" class="box-text">Master Memory vs User Memory</text>
+  <text x="118" y="1012" class="box-text">per group, priority-aware</text>
+
+  <rect x="485" y="770" width="330" height="118" class="box" fill="#6C5B34"/>
+  <text x="513" y="802" class="box-title">Knowledge + Skills</text>
+  <text x="513" y="836" class="box-text">knowledge.md and local skill registry</text>
+  <text x="513" y="862" class="box-text">user-supplied knowledge, prompts, helpers</text>
+
+  <rect x="485" y="920" width="330" height="118" class="box" fill="#4F5F66"/>
+  <text x="513" y="952" class="box-title">SQLite + Dedicated Logs</text>
+  <text x="513" y="986" class="box-text">settings, memories, schedules, accounting</text>
+  <text x="513" y="1012" class="box-text">reply-gate, tool-trace, game, testing, error</text>
+
+  <path class="arrow2" d="M425 829 L476 829"/>
+  <path class="arrow2" d="M425 979 L476 979"/>
+  <path class="mutedArrow" d="M650 770 C650 682 1240 652 1320 624"/>
+
+  <rect x="897" y="700" width="845" height="408" class="lane"/>
+  <text x="921" y="733" class="section">4. Runtime tools and local modules</text>
+
+  <rect x="930" y="768" width="250" height="102" class="box" fill="url(#tool)"/>
+  <text x="956" y="799" class="box-title">Market + Research</text>
+  <text x="956" y="833" class="box-text">market quotes, indicators, web research</text>
+  <text x="956" y="856" class="small">finance access hidden from non-whitelist</text>
+
+  <rect x="1220" y="768" width="250" height="102" class="box" fill="url(#tool)"/>
+  <text x="1246" y="799" class="box-title">Knowledge + Skills</text>
+  <text x="1246" y="833" class="box-text">knowledge lookup, discover_skills, load_skill</text>
+  <text x="1246" y="856" class="small">bundled helper files and local prompts</text>
+
+  <rect x="1510" y="768" width="190" height="102" class="box" fill="url(#tool)"/>
+  <text x="1536" y="799" class="box-title">Weather</text>
+  <text x="1536" y="833" class="box-text">Open-Meteo lookup</text>
+  <text x="1536" y="856" class="small">no API key required</text>
+
+  <rect x="930" y="910" width="250" height="102" class="box" fill="url(#tool)"/>
+  <text x="956" y="941" class="box-title">Fortune + Games</text>
+  <text x="956" y="975" class="box-text">fortune, riddles, brain teasers, chengyu</text>
+  <text x="956" y="998" class="small">GM sessions, scoreboards, leaderboards</text>
+
+  <rect x="1220" y="910" width="250" height="102" class="box" fill="url(#tool)"/>
+  <text x="1246" y="941" class="box-title">Accounting + Schedule</text>
+  <text x="1246" y="975" class="box-text">expense and owe tracking, recurring jobs</text>
+  <text x="1246" y="998" class="small">SQLite-backed exports and lookups</text>
+
+  <rect x="1510" y="910" width="190" height="102" class="box" fill="#653E70"/>
+  <text x="1536" y="941" class="box-title">Code Execution</text>
+  <text x="1536" y="975" class="box-text">Daytona Python sandbox</text>
+  <text x="1536" y="998" class="small">guarded retries and timeout suppression</text>
+
+  <rect x="930" y="1040" width="770" height="44" class="dashed"/>
+  <text x="958" y="1068" class="box-text">Also active: member snapshot diff, welcome flow, social greeting fast-path, and configured timeout fallback.</text>
+
+  <path class="arrow2" d="M1390 624 C1390 684 1055 707 1055 759"/>
+  <path class="arrow2" d="M1390 624 C1390 684 1345 707 1345 759"/>
+  <path class="arrow2" d="M1390 624 C1390 686 1605 707 1605 759"/>
+  <path class="arrow2" d="M1390 624 C1390 808 1055 820 1055 901"/>
+  <path class="arrow2" d="M1390 624 C1390 808 1345 820 1345 901"/>
+  <path class="arrow2" d="M1390 624 C1390 808 1605 820 1605 901"/>
+
+  <rect x="1160" y="170" width="72" height="28" rx="8" fill="#8BE0C2"/>
+  <text x="1176" y="190" class="pill">AUTO</text>
+  <rect x="1480" y="328" width="92" height="28" rx="8" fill="#F0C66D"/>
+  <text x="1497" y="348" class="pill">TOOLS</text>
+  <rect x="711" y="744" width="104" height="28" rx="8" fill="#8BE0C2"/>
+  <text x="727" y="764" class="pill">STATE</text>
+  <rect x="1547" y="1018" width="153" height="28" rx="8" fill="#F0C66D"/>
+  <text x="1564" y="1038" class="pill">CURRENT</text>
+
+  <path class="arrow" d="M1570 439 C1640 439 1655 620 1610 768"/>
+  <path class="arrow" d="M1210 439 C1135 672 800 673 650 770"/>
+
+  <rect x="70" y="1130" width="1660" height="38" rx="8" fill="rgba(255,255,255,.07)" stroke="rgba(255,255,255,.12)"/>
+  <text x="92" y="1155" class="small">Operational idea: ingress and policy decide whether to engage; the main LLM runs with per-group settings, local tools, and skills; SQLite stores state; dedicated logs expose reply gate, tools, testing mode, and game sessions.</text>
+</svg>

@@ -11,6 +11,8 @@
 
 !/docs/
 !/docs/architecture.md
+!/docs/agent_architecture_flowchart.svg
+!/docs/agent_architecture_flowchart_zh.svg
 
 !/foxstar_bot/
 !/foxstar_bot/__init__.py

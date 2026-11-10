@@ -1,5 +1,7 @@
 # Architecture
 
+Runtime diagrams: [English](agent_architecture_flowchart.svg) · [中文](agent_architecture_flowchart_zh.svg). These show supported components; private runtime data and vendor binaries are not bundled.
+
 ## Message flow
 
 The application assembles configuration, authorization, persistence, model clients, tools, skills and a transport adapter. Incoming messages enter a bounded worker queue. `MessageRouter` records context, dispatches commands, evaluates whether to reply, selects a model and executes a bounded tool loop. Replies are split for delivery through the adapter.

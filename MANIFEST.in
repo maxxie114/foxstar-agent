@@ -12,6 +12,8 @@ include app.py
 include config.example.json
 include config.example.yaml
 include docs/architecture.md
+include docs/agent_architecture_flowchart.svg
+include docs/agent_architecture_flowchart_zh.svg
 include foxstar_bot/__init__.py
 include foxstar_bot/agent_api.py
 include foxstar_bot/agent_tasks.py

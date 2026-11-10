@@ -43,6 +43,10 @@ The source distribution includes these startup assets and can be used from its e
 
 ## Explore the code
 
+[Architecture diagram (English)](docs/agent_architecture_flowchart.svg) · [架构图（中文）](docs/agent_architecture_flowchart_zh.svg)
+
+![FoxStar agent runtime architecture](docs/agent_architecture_flowchart.svg)
+
 | Component | Responsibility |
 | --- | --- |
 | [Application](foxstar_bot/app.py) | Assembles services, receives messages, runs workers and polls scheduled tasks. |
