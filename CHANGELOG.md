@@ -19,7 +19,7 @@ This edition contains the model gateway, research agent, background task runner,
 
 ## Development history
 
-The reconstruction follows 349 upstream revisions in their original order and retains their calendar dates. 146 revisions contain changes to public files. The other 203 are empty checkpoints. Commit authors and subjects were replaced and all commit IDs were regenerated. Earlier versions are partial where a function, class or literal could not be cleared.
+The reconstruction follows 349 upstream revisions in their original order and retains their calendar dates. 146 revisions contain changes to public files. The other 203 remain empty commits with descriptive titles. Original commit titles are restored: 340 verbatim and nine with private identifiers or deployment details removed. Author identities use maxxie114 and the GitHub noreply address. Commit IDs were regenerated, and the references below point to the rewritten public history. Earlier versions are partial where a function, class or literal could not be cleared; a title may describe upstream work whose private content is intentionally absent.
 
 Use the short IDs below with Git to inspect the public diffs.
 
